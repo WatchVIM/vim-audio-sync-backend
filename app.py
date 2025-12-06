@@ -608,9 +608,9 @@ INDEX_HTML = """
     const PAYMENT_REQUIRED = true;      // set false to test without PayPal
     const PAY_PER_JOB_AMOUNT = "7.00";
 
-    const INDIE_PLAN_ID  = "P-INDIE_PLAN_ID_HERE";
-    const STUDIO_PLAN_ID = "P-STUDIO_PLAN_ID_HERE";
-    const PRO_PLAN_ID    = "P-PRO_PLAN_ID_HERE";
+    const INDIE_PLAN_ID  = "P-5HF24724VN545651WNEZ6SDQ";
+    const STUDIO_PLAN_ID = "P-7W490604V8434754DNEZ6TAA";
+    const PRO_PLAN_ID    = "P-4KL402168F127405GNEZ6TWY";
 
     const form = document.getElementById('uploadForm');
     const statusEl = document.getElementById('status');
