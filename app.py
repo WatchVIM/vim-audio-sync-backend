@@ -1,24 +1,39 @@
 #!/usr/bin/env python3
 """
-VIM Media | Audio Sync Service
+VIM Media | Audio Sync Service (AudioSync v1)
 
-Web-based tool to:
+Features:
 - Upload multiple camera clips + external audio
-- Support standard formats + RAW (.braw, .r3d, .crm)
-- Sync via waveform cross-correlation
-- Export multi-track .mov ready for Adobe Premiere Pro & Final Cut Pro
+- Support standard formats + RAW (.braw, .r3d, .crm) -> ProRes 422 HQ proxy
+- Waveform-based sync (camera scratch vs external audio)
+- Multi-track .mov output for Adobe Premiere Pro & Final Cut Pro
+- Pay-per-job checkout (no account required)
+- Subscription options (Indie / Studio / Pro) via PayPal
+- Optional user accounts with profile page and sync history
+  (kept separate from WatchVIM / Supabase)
 
 Provided as a service by VIM Media, LLC.
 """
 
 import os
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import zipfile
+from datetime import datetime
 
-from flask import Flask, request, send_file, Response
+from flask import (
+    Flask,
+    request,
+    send_file,
+    Response,
+    redirect,
+    url_for,
+    session,
+)
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 
 import numpy as np
 import soundfile as sf
@@ -43,12 +58,155 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac"}
 ANALYSIS_SAMPLE_RATE = 48000
 DEFAULT_AUDIO_CODEC = "pcm_s16le"
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "audiosync.db")
+STORAGE_DIR = os.path.join(BASE_DIR, "storage")
+
+os.makedirs(STORAGE_DIR, exist_ok=True)
+
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024 * 1024  # 8GB
 
+# SECRET KEY for sessions (change in production, or use env var)
+app.secret_key = os.environ.get("AUDIO_SYNC_SECRET_KEY", "dev-secret-change-me")
+
 
 # ============================================================
-# FRONTEND (VIM Media branded, pricing + PayPal)
+# DATABASE HELPERS
+# ============================================================
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sync_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            clip_key TEXT,
+            filename TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            size_bytes INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+        """
+    )
+
+    conn.commit()
+    conn.close()
+
+
+@app.before_first_request
+def _bootstrap_db():
+    init_db()
+
+
+def create_user(email: str, password: str):
+    conn = get_db()
+    cur = conn.cursor()
+    password_hash = generate_password_hash(password)
+    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    try:
+        cur.execute(
+            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+            (email.lower().strip(), password_hash, created_at),
+        )
+        conn.commit()
+        return cur.lastrowid
+    except sqlite3.IntegrityError:
+        return None
+    finally:
+        conn.close()
+
+
+def find_user_by_email(email: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def get_user_by_id(user_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+def create_sync_job(user_id: int, clip_key: str, filename: str, storage_path: str, size_bytes: int):
+    conn = get_db()
+    cur = conn.cursor()
+    created_at = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    cur.execute(
+        """
+        INSERT INTO sync_jobs (user_id, clip_key, filename, storage_path, size_bytes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (user_id, clip_key, filename, storage_path, size_bytes, created_at),
+    )
+    conn.commit()
+    job_id = cur.lastrowid
+    conn.close()
+    return job_id
+
+
+def get_jobs_for_user(user_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id, clip_key, filename, size_bytes, created_at
+        FROM sync_jobs
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+
+def get_job_for_user(job_id: int, user_id: int):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT * FROM sync_jobs
+        WHERE id = ? AND user_id = ?
+        """,
+        (job_id, user_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row
+
+
+# ============================================================
+# FRONTEND (MAIN PAGE HTML)
 # ============================================================
 
 INDEX_HTML = """
@@ -105,7 +263,7 @@ INDEX_HTML = """
   </style>
 
   <!-- PayPal SDK: replace YOUR_PAYPAL_CLIENT_ID_HERE with your real client id -->
-  <script src="https://www.paypal.com/sdk/js?client-id=YOUR_PAYPAL_CLIENT_ID_HERE&currency=USD"></script>
+  <script src="https://www.paypal.com/sdk/js?client-id=YOUR_PAYPAL_CLIENT_ID_HERE&vault=true&intent=subscription&currency=USD"></script>
 </head>
 <body class="min-h-screen flex flex-col items-center px-4 py-10 gap-10">
 
@@ -132,7 +290,20 @@ INDEX_HTML = """
         </div>
       </div>
 
+      <!-- Right header: profile / login shortcut -->
       <div class="flex flex-col items-end gap-1">
+        <div class="flex items-center gap-3 text-[11px]">
+          <!-- These spans are edited by JS depending on login state -->
+          <span id="userStatus" class="text-slate-300"></span>
+          <a id="profileLink" href="/profile"
+             class="hidden text-watchGold hover:text-white font-semibold">Profile</a>
+          <a id="loginLink" href="/login"
+             class="text-slate-300 hover:text-watchGold font-semibold">Login</a>
+          <a id="signupLink" href="/signup"
+             class="text-slate-300 hover:text-watchGold font-semibold">Sign up</a>
+          <a id="logoutLink" href="/logout"
+             class="hidden text-slate-400 hover:text-red-400 font-semibold">Logout</a>
+        </div>
         <a href="#pricing"
            class="inline-flex items-center text-xs font-semibold text-slate-300 hover:text-watchGold">
           View pricing &rsaquo;
@@ -274,12 +445,8 @@ INDEX_HTML = """
         </div>
 
         <p class="text-[11px] text-slate-500 border-t border-white/10 pt-3 mt-2">
-          Already on an Indie / Studio / Pro plan? You&apos;ll soon be able to log in
-          and sync without Pay-per-job. For now, teams can contact
-          <a href="mailto:streaming@watchvim.com" class="underline hover:text-watchGold">
-            streaming@watchvim.com
-          </a>
-          for studio access.
+          Already on an Indie / Studio / Pro plan? Use the subscription options below
+          so you don&apos;t have to pay per job.
         </p>
       </div>
     </section>
@@ -358,10 +525,12 @@ INDEX_HTML = """
             <li>Up to 6 audio tracks per clip</li>
           </ul>
         </div>
-        <a href="mailto:streaming@watchvim.com?subject=Indie%20Creator%20AudioSync"
-           class="mt-3 inline-flex justify-center rounded-full border border-watchGold/80 px-3 py-1.5 text-[11px] font-semibold text-watchGold hover:bg-watchGold hover:text-black">
-          Talk to VIM about Indie
-        </a>
+        <div class="mt-3">
+          <div id="paypal-indie-sub"></div>
+          <p class="mt-2 text-[11px] text-slate-500">
+            Subscribe with PayPal. No separate VIM account needed yet.
+          </p>
+        </div>
       </div>
 
       <!-- Studio -->
@@ -379,10 +548,12 @@ INDEX_HTML = """
             <li>3–5 team seats</li>
           </ul>
         </div>
-        <a href="mailto:streaming@watchvim.com?subject=Studio%20AudioSync"
-           class="mt-3 inline-flex justify-center rounded-full bg-watchGold px-3 py-1.5 text-[11px] font-semibold text-black hover:bg-yellow-400">
-          Talk to VIM about Studio
-        </a>
+        <div class="mt-3">
+          <div id="paypal-studio-sub"></div>
+          <p class="mt-2 text-[11px] text-slate-500">
+            Subscribe with PayPal for recurring studio usage.
+          </p>
+        </div>
       </div>
 
       <!-- Pro Studio -->
@@ -400,10 +571,12 @@ INDEX_HTML = """
             <li>Up to 15 seats + API access</li>
           </ul>
         </div>
-        <a href="mailto:streaming@watchvim.com?subject=Pro%20Studio%20AudioSync"
-           class="mt-3 inline-flex justify-center rounded-full border border-watchGold/80 px-3 py-1.5 text-[11px] font-semibold text-watchGold hover:bg-watchGold hover:text-black">
-          Talk to VIM about Pro Studio
-        </a>
+        <div class="mt-3">
+          <div id="paypal-pro-sub"></div>
+          <p class="mt-2 text-[11px] text-slate-500">
+            Subscribe with PayPal for Pro-level volume.
+          </p>
+        </div>
       </div>
 
       <!-- Enterprise -->
@@ -431,9 +604,13 @@ INDEX_HTML = """
   <script>
     document.getElementById('year').textContent = new Date().getFullYear();
 
-    // Payment config (change here if needed)
-    const PAYMENT_REQUIRED = true;      // set to false for testing without PayPal
-    const PAY_PER_JOB_AMOUNT = "7.00";  // USD as string
+    // ===== Payment config =====
+    const PAYMENT_REQUIRED = true;      // set false to test without PayPal
+    const PAY_PER_JOB_AMOUNT = "7.00";
+
+    const INDIE_PLAN_ID  = "P-INDIE_PLAN_ID_HERE";
+    const STUDIO_PLAN_ID = "P-STUDIO_PLAN_ID_HERE";
+    const PRO_PLAN_ID    = "P-PRO_PLAN_ID_HERE";
 
     const form = document.getElementById('uploadForm');
     const statusEl = document.getElementById('status');
@@ -445,9 +622,21 @@ INDEX_HTML = """
     const processingSub = document.getElementById('processingSub');
     const paymentStatusEl = document.getElementById('paymentStatus');
 
+    const userStatusEl = document.getElementById('userStatus');
+    const profileLink = document.getElementById('profileLink');
+    const loginLink = document.getElementById('loginLink');
+    const signupLink = document.getElementById('signupLink');
+    const logoutLink = document.getElementById('logoutLink');
+
     let overlayTimer = null;
     let isProcessing = false;
-    let hasPaid = !PAYMENT_REQUIRED;  // if payment not required, treat as paid
+    let hasPaid = !PAYMENT_REQUIRED;
+
+    // This flag is injected via cookie by backend using a tiny trick:
+    // we can't see Flask session directly, but we can expose a header
+    // later if you want. For now, we just show generic text.
+    // (If you later add an API to expose logged-in email, update this.)
+    userStatusEl.textContent = '';
 
     if (PAYMENT_REQUIRED) {
       syncButton.disabled = true;
@@ -511,7 +700,7 @@ INDEX_HTML = """
       if (overlayTimer) clearInterval(overlayTimer);
     }
 
-    // PayPal buttons
+    // ===== PayPal: Pay-per-job button =====
     if (window.paypal && PAYMENT_REQUIRED) {
       paypal.Buttons({
         style: {
@@ -547,6 +736,61 @@ INDEX_HTML = """
       paymentStatusEl.textContent = 'Payment is disabled in this environment (testing mode).';
     }
 
+    // ===== PayPal: Subscription buttons (Indie / Studio / Pro) =====
+    if (window.paypal) {
+      if (INDIE_PLAN_ID && INDIE_PLAN_ID !== "P-INDIE_PLAN_ID_HERE") {
+        paypal.Buttons({
+          style: { color: 'gold', shape: 'pill', label: 'subscribe' },
+          createSubscription: function(data, actions) {
+            return actions.subscription.create({
+              plan_id: INDIE_PLAN_ID
+            });
+          },
+          onApprove: function(data, actions) {
+            alert('Thank you for subscribing to Indie Creator! (Subscription ID: ' + data.subscriptionID + ')');
+          },
+          onError: function(err) {
+            console.error(err);
+          }
+        }).render('#paypal-indie-sub');
+      }
+
+      if (STUDIO_PLAN_ID && STUDIO_PLAN_ID !== "P-STUDIO_PLAN_ID_HERE") {
+        paypal.Buttons({
+          style: { color: 'gold', shape: 'pill', label: 'subscribe' },
+          createSubscription: function(data, actions) {
+            return actions.subscription.create({
+              plan_id: STUDIO_PLAN_ID
+            });
+          },
+          onApprove: function(data, actions) {
+            alert('Thank you for subscribing to Studio! (Subscription ID: ' + data.subscriptionID + ')');
+          },
+          onError: function(err) {
+            console.error(err);
+          }
+        }).render('#paypal-studio-sub');
+      }
+
+      if (PRO_PLAN_ID && PRO_PLAN_ID !== "P-PRO_PLAN_ID_HERE") {
+        paypal.Buttons({
+          style: { color: 'gold', shape: 'pill', label: 'subscribe' },
+          createSubscription: function(data, actions) {
+            return actions.subscription.create({
+              plan_id: PRO_PLAN_ID
+            });
+          },
+          onApprove: function(data, actions) {
+            alert('Thank you for subscribing to Pro Studio! (Subscription ID: ' + data.subscriptionID + ')');
+          },
+          onError: function(err) {
+            console.error(err);
+          }
+        }).render('#paypal-pro-sub');
+      }
+    }
+
+    // ===== Upload & sync handler =====
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
 
@@ -615,7 +859,178 @@ INDEX_HTML = """
 
 
 # ============================================================
-# CORE SYNC LOGIC
+# SIMPLE AUTH HTML (SIGNUP / LOGIN / PROFILE)
+# ============================================================
+
+def render_auth_page(title: str, action_url: str, button_label: str, error: str = ""):
+    error_html = ""
+    if error:
+        error_html = f'<p class="mt-2 text-xs text-red-400">{error}</p>'
+
+    return f"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>{title} · VIM AudioSync</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {{
+      theme: {{
+        extend: {{
+          colors: {{
+            watchBlack: "#0a0a0a",
+            watchRed: "#e50914",
+            watchGold: "#d4af37",
+          }}
+        }}
+      }}
+    }}
+  </script>
+</head>
+<body class="min-h-screen bg-watchBlack text-slate-100 flex items-center justify-center px-4">
+  <div class="w-full max-w-md bg-black/80 border border-white/10 rounded-2xl p-6 space-y-4 shadow-2xl">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-2">
+        <img
+          src="https://t6ht6kdwnezp05ut.public.blob.vercel-storage.com/WatchVIM%20-%20Content/WatchVIM_New_OTT_Logo.png"
+          alt="VIM Media"
+          class="h-8 w-auto"
+        />
+        <span class="text-xs text-slate-400 uppercase tracking-wide">AudioSync</span>
+      </div>
+      <a href="/" class="text-xs text-slate-400 hover:text-watchGold">Back to sync</a>
+    </div>
+
+    <h1 class="text-xl font-semibold">{title}</h1>
+
+    <form method="post" action="{action_url}" class="space-y-4">
+      <div>
+        <label class="block text-xs font-semibold mb-1">Email</label>
+        <input type="email" name="email" required
+               class="w-full rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-watchGold" />
+      </div>
+      <div>
+        <label class="block text-xs font-semibold mb-1">Password</label>
+        <input type="password" name="password" required
+               class="w-full rounded-md bg-slate-900 border border-slate-700 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-watchGold" />
+      </div>
+      {error_html}
+      <button type="submit"
+              class="w-full inline-flex items-center justify-center rounded-full bg-watchGold text-black text-sm font-semibold py-2 hover:bg-yellow-400">
+        {button_label}
+      </button>
+    </form>
+  </div>
+</body>
+</html>
+"""
+
+
+def render_profile_page(user_email: str, jobs):
+    rows_html = ""
+    if not jobs:
+        rows_html = """
+          <tr>
+            <td colspan="4" class="px-3 py-4 text-center text-xs text-slate-500">
+              No sync history yet. Run your first job from the main AudioSync page.
+            </td>
+          </tr>
+        """
+    else:
+        for job in jobs:
+            size_mb = (job["size_bytes"] or 0) / (1024 * 1024)
+            clip = job["clip_key"] or "-"
+            rows_html += f"""
+              <tr class="border-t border-white/5">
+                <td class="px-3 py-2 text-xs text-slate-200">{job['created_at']}</td>
+                <td class="px-3 py-2 text-xs text-slate-300">{clip}</td>
+                <td class="px-3 py-2 text-xs text-slate-300">{job['filename']}</td>
+                <td class="px-3 py-2 text-xs text-slate-300">
+                  {size_mb:.1f} MB
+                  <a href="/download/{job['id']}"
+                     class="ml-3 text-[11px] text-watchGold hover:text-white underline">
+                    Download
+                  </a>
+                </td>
+              </tr>
+            """
+
+    return f"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Profile · VIM AudioSync</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {{
+      theme: {{
+        extend: {{
+          colors: {{
+            watchBlack: "#0a0a0a",
+            watchRed: "#e50914",
+            watchGold: "#d4af37",
+          }}
+        }}
+      }}
+    }}
+  </script>
+</head>
+<body class="min-h-screen bg-watchBlack text-slate-100 px-4 py-8">
+  <div class="max-w-5xl mx-auto space-y-6">
+    <header class="flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <img
+          src="https://t6ht6kdwnezp05ut.public.blob.vercel-storage.com/WatchVIM%20-%20Content/WatchVIM_New_OTT_Logo.png"
+          alt="VIM Media"
+          class="h-9 w-auto"
+        />
+        <div>
+          <h1 class="text-lg font-semibold">Your AudioSync profile</h1>
+          <p class="text-xs text-slate-400">{user_email}</p>
+        </div>
+      </div>
+      <div class="flex flex-col items-end gap-1">
+        <a href="/" class="text-xs text-slate-300 hover:text-watchGold">Back to sync</a>
+        <a href="/logout" class="text-xs text-slate-400 hover:text-red-400">Logout</a>
+      </div>
+    </header>
+
+    <section class="bg-black/70 border border-white/10 rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-slate-100">Previous sync jobs</h2>
+        <p class="text-[11px] text-slate-400">
+          Files listed here are separate from watchvim.com and stored only for your AudioSync account.
+        </p>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-left text-xs">
+          <thead class="bg-white/5">
+            <tr>
+              <th class="px-3 py-2 font-semibold text-slate-300">Date</th>
+              <th class="px-3 py-2 font-semibold text-slate-300">Clip key</th>
+              <th class="px-3 py-2 font-semibold text-slate-300">File</th>
+              <th class="px-3 py-2 font-semibold text-slate-300">Size &amp; Download</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows_html}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</body>
+</html>
+"""
+
+
+# ============================================================
+# SYNC LOGIC (FFMPEG, WAV, ETC.)
 # ============================================================
 
 def ensure_ffmpeg():
@@ -785,12 +1200,112 @@ def classify_and_group_files(temp_dir, uploaded_files):
 
 
 # ============================================================
-# ROUTES
+# ROUTES: MAIN, AUTH, PROFILE, DOWNLOAD, SYNC
 # ============================================================
 
 @app.route("/", methods=["GET"])
 def index():
     return Response(INDEX_HTML, mimetype="text/html")
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup():
+    if request.method == "GET":
+        return Response(
+            render_auth_page("Sign up for AudioSync", "/signup", "Create account"),
+            mimetype="text/html",
+        )
+
+    email = (request.form.get("email") or "").strip()
+    password = request.form.get("password") or ""
+
+    if not email or not password:
+        return Response(
+            render_auth_page("Sign up for AudioSync", "/signup", "Create account", "Email and password are required."),
+            mimetype="text/html",
+        )
+
+    existing = find_user_by_email(email)
+    if existing:
+        return Response(
+            render_auth_page("Sign up for AudioSync", "/signup", "Create account", "That email is already registered."),
+            mimetype="text/html",
+        )
+
+    user_id = create_user(email, password)
+    if not user_id:
+        return Response(
+            render_auth_page("Sign up for AudioSync", "/signup", "Create account", "Could not create account. Try again."),
+            mimetype="text/html",
+        )
+
+    session["user_id"] = user_id
+    session["user_email"] = email
+    return redirect(url_for("profile"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        return Response(
+            render_auth_page("Log in to AudioSync", "/login", "Log in"),
+            mimetype="text/html",
+        )
+
+    email = (request.form.get("email") or "").strip()
+    password = request.form.get("password") or ""
+
+    user = find_user_by_email(email)
+    if not user or not check_password_hash(user["password_hash"], password):
+        return Response(
+            render_auth_page("Log in to AudioSync", "/login", "Log in", "Invalid email or password."),
+            mimetype="text/html",
+        )
+
+    session["user_id"] = user["id"]
+    session["user_email"] = user["email"]
+    return redirect(url_for("profile"))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
+@app.route("/profile")
+def profile():
+    user_id = session.get("user_id")
+    user_email = session.get("user_email")
+
+    if not user_id or not user_email:
+        return redirect(url_for("login"))
+
+    jobs = get_jobs_for_user(user_id)
+    html = render_profile_page(user_email, jobs)
+    return Response(html, mimetype="text/html")
+
+
+@app.route("/download/<int:job_id>")
+def download(job_id: int):
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("login"))
+
+    job = get_job_for_user(job_id, user_id)
+    if not job:
+        return "Not found or not authorized", 404
+
+    path = job["storage_path"]
+    if not os.path.isfile(path):
+        return "File no longer available on server", 404
+
+    return send_file(
+        path,
+        as_attachment=True,
+        download_name=job["filename"],
+        mimetype="video/quicktime",
+    )
 
 
 @app.route("/sync", methods=["POST"])
@@ -819,7 +1334,7 @@ def sync_route():
             out_path = os.path.join(tmpdir, out_name)
 
             process_clip_to_multitrack_mov(video_path, ext_paths, out_path)
-            outputs.append(out_path)
+            outputs.append((clip_key, out_path))
 
         if not outputs:
             return (
@@ -828,8 +1343,22 @@ def sync_route():
                 400,
             )
 
+        # If user is logged in, copy outputs to persistent storage and record jobs
+        user_id = session.get("user_id")
+        if user_id:
+            user_dir = os.path.join(STORAGE_DIR, str(user_id))
+            os.makedirs(user_dir, exist_ok=True)
+
+            for clip_key, temp_out in outputs:
+                filename = os.path.basename(temp_out)
+                dest_path = os.path.join(user_dir, filename)
+                shutil.copy2(temp_out, dest_path)
+                size_bytes = os.path.getsize(dest_path)
+                create_sync_job(user_id, clip_key, filename, dest_path, size_bytes)
+
+        # Response: single file or zip (same as before)
         if len(outputs) == 1:
-            out_path = outputs[0]
+            clip_key, out_path = outputs[0]
             return send_file(
                 out_path,
                 as_attachment=True,
@@ -839,7 +1368,7 @@ def sync_route():
         else:
             zip_path = os.path.join(tmpdir, "synced_clips.zip")
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for op in outputs:
+                for clip_key, op in outputs:
                     zf.write(op, arcname=os.path.basename(op))
 
             return send_file(
@@ -849,6 +1378,7 @@ def sync_route():
                 mimetype="application/zip",
             )
     finally:
+        # temp dir will be cleaned up eventually; explicit cleanup optional here
         pass
 
 
