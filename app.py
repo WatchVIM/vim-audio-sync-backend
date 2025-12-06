@@ -1,39 +1,14 @@
 #!/usr/bin/env python3
 """
-VIM Media | Web Audio Sync Service
+VIM Media | Audio Sync Service
 
-A web-based tool by VIM Media that:
+Web-based tool to:
+- Upload multiple camera clips + external audio
+- Support standard formats + RAW (.braw, .r3d, .crm)
+- Sync via waveform cross-correlation
+- Export multi-track .mov ready for Adobe Premiere Pro & Final Cut Pro
 
-- Lets users upload multiple camera clips and external audio files
-- Supports standard video containers (.mp4, .mov, .mxf, etc.)
-- Supports RAW camera formats like Blackmagic RAW (.braw),
-  RED (.r3d), and Canon Cinema RAW (.crm)
-
-Per clip (grouped by filename prefix, e.g. A001_cam.mp4 + A001_zoom.wav):
-
-  * Uses onboard/scratch audio from the camera as sync reference
-  * Computes offset to each external recorder via waveform correlation
-  * Builds a multi-track .mov suitable for Adobe Premiere Pro and Final Cut Pro:
-
-      - NON-RAW footage:
-          - Video: copied (no re-encode)
-          - Audio tracks:
-              Track 1: camera scratch
-              Track 2..N: external synced tracks
-
-      - RAW footage (.braw, .r3d, .crm):
-          - Video: transcoded to ProRes 422 HQ proxy
-          - Audio tracks:
-              Track 1: camera scratch
-              Track 2..N: external synced tracks
-
-Usage (development):
-
-  pip install flask numpy scipy soundfile
-  # Install ffmpeg on the server (must be on PATH)
-  python app.py
-
-Then open: http://localhost:5000
+Provided as a service by VIM Media, LLC.
 """
 
 import os
@@ -54,32 +29,31 @@ from scipy.signal import correlate
 # CONFIG
 # ============================================================
 
-# Common video container/codecs
+# Video formats we accept
 VIDEO_EXTS = {
     ".mp4", ".mov", ".mxf", ".avi", ".mkv",
-    # RAW camera formats (container or standalone)
     ".braw",  # Blackmagic RAW
     ".r3d",   # RED RAW
     ".crm",   # Canon Cinema RAW
 }
 
-# RAW formats that we will proxy to ProRes
+# RAW formats that get proxied to ProRes 422 HQ
 RAW_VIDEO_EXTS = {".braw", ".r3d", ".crm"}
 
+# Audio formats we accept
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac"}
 
-ANALYSIS_SAMPLE_RATE = 48000  # Standard for video post workflows
-DEFAULT_AUDIO_CODEC = "pcm_s16le"  # Uncompressed PCM (great for NLEs)
+ANALYSIS_SAMPLE_RATE = 48000  # standard video-post sample rate
+DEFAULT_AUDIO_CODEC = "pcm_s16le"  # uncompressed PCM
 
 # Flask app
 app = Flask(__name__)
-
-# Allow fairly large uploads (adjust for your server)
-app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024 * 1024  # 8 GB total per request
+# Allow up to ~8 GB upload per request (adjust as needed)
+app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024 * 1024  # 8GB
 
 
 # ============================================================
-# HTML FRONTEND (VIM Media Branding)
+# FRONTEND (VIM Media branded, with progress overlay)
 # ============================================================
 
 INDEX_HTML = """
@@ -90,7 +64,7 @@ INDEX_HTML = """
   <title>VIM Media | Audio Sync Service</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <!-- Tailwind CSS via CDN -->
+  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -112,54 +86,133 @@ INDEX_HTML = """
       color: #f9fafb;
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+    .spin-slow {
+      animation: spin 1.2s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .progress-stripe {
+      background-image: linear-gradient(
+        120deg,
+        rgba(212, 175, 55, 0.1) 0%,
+        rgba(212, 175, 55, 0.8) 40%,
+        rgba(212, 175, 55, 0.1) 80%
+      );
+      background-size: 200% 100%;
+      animation: progressMove 1.5s linear infinite;
+    }
+    @keyframes progressMove {
+      from { background-position: 200% 0; }
+      to   { background-position: -200% 0; }
+    }
   </style>
 </head>
 <body class="min-h-screen flex items-center justify-center px-4 py-10">
-  <div class="w-full max-w-3xl bg-watchBlack/90 border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8">
+  <div class="w-full max-w-4xl bg-watchBlack/90 border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8 relative">
     <!-- Header -->
     <header class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-watchRed flex items-center justify-center">
-          <span class="text-white text-lg font-bold tracking-tight">VIM</span>
+        <!-- VIM logo -->
+        <div class="h-10 flex items-center">
+          <img
+            src="https://t6ht6kdwnezp05ut.public.blob.vercel-storage.com/WatchVIM%20-%20Content/WatchVIM_New_OTT_Logo.png"
+            alt="VIM Media logo"
+            class="h-10 w-auto object-contain"
+          />
         </div>
         <div>
           <h1 class="text-xl sm:text-2xl font-semibold tracking-tight">
             Audio Sync Service
           </h1>
           <p class="text-xs sm:text-sm text-slate-300">
-            Provided by VIM Media, LLC &mdash; Multi-track, post-ready audio sync for editors.
+            Provided by VIM Media, LLC — multi-track, post-ready audio sync for editors.
           </p>
         </div>
       </div>
-      <a href="https://watchvim.com" target="_blank"
-         class="hidden sm:inline-flex items-center text-xs font-semibold text-watchGold hover:text-white">
-        watchvim.com &rsaquo;
-      </a>
+
+      <div class="flex flex-col items-end gap-1">
+        <a href="https://watchvim.com" target="_blank"
+           class="hidden sm:inline-flex items-center text-xs font-semibold text-watchGold hover:text-white">
+          watchvim.com &rsaquo;
+        </a>
+        <span class="inline-flex items-center gap-1 rounded-full bg-white/5 px-3 py-1 text-[10px] font-medium text-slate-300 border border-white/10">
+          <span class="w-1.5 h-1.5 rounded-full bg-watchGold"></span>
+          Powered by VIM Media AudioSync v1
+        </span>
+      </div>
     </header>
 
-    <!-- Description -->
-    <section class="mb-6 text-sm text-slate-200 space-y-2">
-      <p>
-        Upload your camera clips and external audio files. This service automatically
-        synchronizes waveforms and delivers an edit-ready <span class="font-semibold text-watchGold">.mov</span>
-        with multiple audio tracks compatible with <span class="font-semibold">Adobe Premiere Pro</span>
-        and <span class="font-semibold">Final Cut Pro</span>.
-      </p>
-      <p class="text-xs text-slate-400">
-        Clips are grouped by filename prefix (ex: <code>A001_cam.mp4</code>,
-        <code>A001_zoom.wav</code>, <code>A001_boom.wav</code> &rarr;
-        <code>A001_synced.mov</code>).
-      </p>
-      <ul class="text-xs text-slate-300 list-disc pl-4 space-y-1">
-        <li>Standard footage (.mp4, .mov, .mxf, etc.) &rarr; video copied (no re-encode) + multi-track audio.</li>
-        <li>RAW footage (.braw, .r3d, .crm) &rarr; transcoded to ProRes 422 HQ proxy + multi-track audio.</li>
-      </ul>
+    <!-- Description + What this clip will contain -->
+    <section class="mb-6 grid gap-4 md:grid-cols-[minmax(0,2fr),minmax(0,1.5fr)]">
+      <div class="text-sm text-slate-200 space-y-2">
+        <p>
+          Upload your camera clips and external audio files. This service automatically
+          synchronizes waveforms and delivers an edit-ready
+          <span class="font-semibold text-watchGold">.mov</span>
+          with multiple audio tracks compatible with
+          <span class="font-semibold">Adobe Premiere Pro</span> and
+          <span class="font-semibold">Final Cut Pro</span>.
+        </p>
+        <p class="text-xs text-slate-400">
+          Clips are grouped by filename prefix (e.g., <code>A001_cam.mp4</code>,
+          <code>A001_zoom.wav</code> &rarr; <code>A001_synced.mov</code>).
+        </p>
+      </div>
+
+      <!-- What this clip will contain -->
+      <div class="bg-black/40 border border-white/10 rounded-2xl p-3 sm:p-4 text-xs text-slate-200 space-y-2">
+        <h2 class="text-[11px] font-semibold uppercase tracking-wide text-slate-300 mb-1">
+          What this clip will contain
+        </h2>
+        <ul class="space-y-1.5">
+          <li class="flex gap-2">
+            <span class="mt-[3px] w-1.5 h-1.5 rounded-full bg-watchGold"></span>
+            <div>
+              <span class="font-semibold text-watchGold">Track 1 – Camera scratch</span><br/>
+              <span class="text-slate-400">
+                Audio captured directly on the camera body, used as the sync reference.
+              </span>
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="mt-[3px] w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+            <div>
+              <span class="font-semibold text-slate-100">Track 2+ – External recorders</span><br/>
+              <span class="text-slate-400">
+                Each external WAV/recorder upload becomes its own synced track for mixing.
+              </span>
+            </div>
+          </li>
+          <li class="flex gap-2">
+            <span class="mt-[3px] w-1.5 h-1.5 rounded-full bg-watchRed"></span>
+            <div>
+              <span class="font-semibold text-slate-100">Video format</span><br/>
+              <span class="text-slate-400">
+                Standard footage: original video copied, no re-encode.<br/>
+                RAW (.braw / .r3d / .crm): transcoded to a ProRes 422 HQ proxy for smooth editing.
+              </span>
+            </div>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- File summary -->
+    <section class="mb-4">
+      <h2 class="text-xs font-semibold text-slate-300 uppercase tracking-wide mb-1">
+        Selected files
+      </h2>
+      <div id="fileList" class="text-xs text-slate-400 border border-white/5 rounded-lg p-3 min-h-[3rem] bg-black/30">
+        <span class="text-slate-500">No files selected yet.</span>
+      </div>
     </section>
 
     <!-- Upload Form -->
     <form id="uploadForm" class="space-y-5">
       <div>
-        <label class="block text-sm font-medium mb-1">Upload files</label>
+        <label class="block text-sm font-medium mb-1">Upload media</label>
         <input id="files" name="files" type="file" multiple
                class="block w-full text-sm text-slate-100
                       file:mr-3 file:py-2 file:px-4
@@ -169,21 +222,22 @@ INDEX_HTML = """
                       hover:file:bg-red-700
                       cursor-pointer" />
         <p class="mt-2 text-xs text-slate-400">
-          Include your camera video (.mp4, .mov, .mxf, .braw, .r3d, .crm) and matching external audio (.wav, .mp3, .m4a, etc.).
-          Make sure filenames share a prefix for each clip (e.g. <code>SC01_T01_*.ext</code>).
+          Include camera video (.mp4, .mov, .mxf, .braw, .r3d, .crm) and matching
+          external audio (.wav, .mp3, .m4a, etc.). Use matching prefixes
+          (e.g. <code>SC01_T01_cam.mp4</code> and <code>SC01_T01_zoom.wav</code>).
         </p>
       </div>
 
-      <button type="submit"
+      <button id="syncButton" type="submit"
               class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full
                      bg-watchGold text-black text-sm font-semibold
-                     hover:bg-yellow-400 transition">
+                     hover:bg-yellow-400 transition disabled:opacity-60 disabled:cursor-not-allowed">
         <span>Sync &amp; Download</span>
       </button>
     </form>
 
-    <!-- Status -->
-    <div id="status" class="mt-4 text-xs sm:text-sm text-slate-300"></div>
+    <!-- Status text -->
+    <div id="status" class="mt-4 text-xs sm:text-sm text-slate-300 min-h-[1.5rem]"></div>
 
     <!-- Footer -->
     <footer class="mt-6 border-t border-white/10 pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -194,15 +248,113 @@ INDEX_HTML = """
         Built for post-production teams who live in timelines, bins, and multitrack madness.
       </p>
     </footer>
+
+    <!-- Processing overlay -->
+    <div id="processingOverlay"
+         class="hidden absolute inset-0 rounded-3xl bg-black/80 backdrop-blur-md flex flex-col items-center justify-center z-20">
+      <div class="flex flex-col items-center gap-4 px-6 text-center max-w-sm">
+        <div class="flex items-center justify-center gap-3">
+          <div class="h-9 flex items-center">
+            <img
+              src="https://t6ht6kdwnezp05ut.public.blob.vercel-storage.com/WatchVIM%20-%20Content/WatchVIM_New_OTT_Logo.png"
+              alt="VIM Media logo small"
+              class="h-9 w-auto object-contain"
+            />
+          </div>
+          <span class="text-sm font-semibold text-slate-100">
+            Syncing with VIM Media
+          </span>
+        </div>
+
+        <div class="w-10 h-10 rounded-full border border-watchGold/60 border-t-transparent spin-slow"></div>
+
+        <div class="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+          <div class="w-2/3 h-full progress-stripe"></div>
+        </div>
+
+        <div>
+          <p id="processingStep" class="text-sm font-semibold text-slate-100">
+            Preparing upload…
+          </p>
+          <p id="processingSub" class="mt-1 text-xs text-slate-300">
+            This can take a few minutes for 4K or RAW footage. Please keep this tab open.
+          </p>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
-    // Year
     document.getElementById('year').textContent = new Date().getFullYear();
 
     const form = document.getElementById('uploadForm');
     const statusEl = document.getElementById('status');
     const filesInput = document.getElementById('files');
+    const fileListEl = document.getElementById('fileList');
+    const syncButton = document.getElementById('syncButton');
+    const overlay = document.getElementById('processingOverlay');
+    const processingStep = document.getElementById('processingStep');
+    const processingSub = document.getElementById('processingSub');
+
+    let overlayTimer = null;
+    let isProcessing = false;
+
+    function renderFileList(files) {
+      if (!files.length) {
+        fileListEl.innerHTML = '<span class="text-slate-500">No files selected yet.</span>';
+        return;
+      }
+      const items = [];
+      for (const f of files) {
+        items.push(
+          '<li class="flex justify-between gap-3">' +
+            '<span class="truncate max-w-[14rem]">' + f.name + '</span>' +
+            '<span class="text-slate-500">' + (f.size / (1024*1024)).toFixed(1) + ' MB</span>' +
+          '</li>'
+        );
+      }
+      fileListEl.innerHTML = '<ul class="space-y-1">' + items.join("") + '</ul>';
+    }
+
+    filesInput.addEventListener('change', () => {
+      renderFileList(filesInput.files);
+    });
+
+    function setOverlayStep(step, sub) {
+      processingStep.textContent = step;
+      if (sub) processingSub.textContent = sub;
+    }
+
+    function showOverlay() {
+      isProcessing = true;
+      overlay.classList.remove('hidden');
+      syncButton.disabled = true;
+
+      const steps = [
+        ['Step 1/3: Uploading your media…', 'Large RAW and 4K files may take a little longer to reach our servers.'],
+        ['Step 2/3: Syncing audio & video waveforms…', 'We analyze camera scratch audio and your external recordings to find the best alignment.'],
+        ['Step 3/3: Building your multi-track .mov…', 'Creating an edit-ready file with separate tracks for scratch and external audio.'],
+      ];
+      let idx = 0;
+      setOverlayStep(steps[0][0], steps[0][1]);
+
+      if (overlayTimer) clearInterval(overlayTimer);
+      overlayTimer = setInterval(() => {
+        if (!isProcessing) {
+          clearInterval(overlayTimer);
+          return;
+        }
+        idx = (idx + 1) % steps.length;
+        setOverlayStep(steps[idx][0], steps[idx][1]);
+      }, 6000);
+    }
+
+    function hideOverlay() {
+      isProcessing = false;
+      overlay.classList.add('hidden');
+      syncButton.disabled = false;
+      if (overlayTimer) clearInterval(overlayTimer);
+    }
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -212,7 +364,8 @@ INDEX_HTML = """
         return;
       }
 
-      statusEl.textContent = 'Uploading & processing… this may take a while for large files.';
+      statusEl.textContent = 'Uploading & syncing… please keep this tab open.';
+      showOverlay();
 
       const formData = new FormData();
       for (const f of filesInput.files) {
@@ -222,17 +375,19 @@ INDEX_HTML = """
       try {
         const res = await fetch('/sync', {
           method: 'POST',
-          body: formData
+          body: formData,
         });
 
         if (!res.ok) {
           const text = await res.text();
+          hideOverlay();
           statusEl.textContent = 'Error: ' + text;
           return;
         }
 
-        const blob = await res.blob();
+        setOverlayStep('Finishing up…', 'Packaging your synced media and starting the download.');
 
+        const blob = await res.blob();
         const disposition = res.headers.get('Content-Disposition') || '';
         let filename = 'synced_output';
         const match = disposition.match(/filename="?([^"]+)"?/i);
@@ -249,10 +404,12 @@ INDEX_HTML = """
         a.remove();
         URL.revokeObjectURL(url);
 
-        statusEl.textContent = 'Done! Your synced file(s) have downloaded.';
+        hideOverlay();
+        statusEl.textContent = 'Done! Your synced file(s) should begin downloading automatically.';
       } catch (err) {
         console.error(err);
-        statusEl.textContent = 'Unexpected error. Please check the browser console or contact VIM Media support.';
+        hideOverlay();
+        statusEl.textContent = 'Unexpected error. Please try again or contact VIM Media support.';
       }
     });
   </script>
@@ -266,16 +423,13 @@ INDEX_HTML = """
 # ============================================================
 
 def ensure_ffmpeg():
-    """Ensure ffmpeg is installed and available."""
+    """Ensure ffmpeg is installed and on PATH."""
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg on your server and ensure it is on PATH.")
+        raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg on your server.")
 
 
 def run_ffmpeg(args):
-    """
-    Run ffmpeg with -y plus provided args.
-    Raises RuntimeError on failure.
-    """
+    """Run ffmpeg with -y and provided args; raise on error."""
     cmd = ["ffmpeg", "-y"] + args
     print("Running:", " ".join(cmd))
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -286,8 +440,8 @@ def run_ffmpeg(args):
 
 def extract_mono_wav(input_path: str, output_path: str, sample_rate: int = ANALYSIS_SAMPLE_RATE):
     """
-    Extract or convert any media's audio to mono WAV at given sample rate.
-    Used for waveform analysis only (not for final delivery).
+    Extract / convert audio from any media to mono WAV at a fixed sample rate.
+    Used only for analysis, not for final delivery.
     """
     run_ffmpeg([
         "-i", input_path,
@@ -311,12 +465,11 @@ def estimate_offset_seconds(cam_audio: np.ndarray,
                             ext_audio: np.ndarray,
                             sample_rate: int) -> float:
     """
-    Estimate offset between camera audio and external audio via cross-correlation.
+    Estimate time offset between camera audio and external audio via cross-correlation.
 
-    Return:
-        offset_seconds (float)
-          > 0 : external audio starts that many seconds AFTER camera
-          < 0 : external audio starts that many seconds BEFORE camera
+    Returns offset in seconds:
+      > 0: external starts later than camera
+      < 0: external starts earlier than camera
     """
     cam = cam_audio.astype(np.float32)
     ext = ext_audio.astype(np.float32)
@@ -340,14 +493,12 @@ def build_aligned_external(cam_audio: np.ndarray,
                            offset_seconds: float) -> np.ndarray:
     """
     Build external audio waveform aligned to camera audio length.
-
-    offset_seconds > 0  => external starts later than camera
-    offset_seconds < 0  => external starts earlier than camera
     """
     n_cam = len(cam_audio)
     ext = ext_audio.astype(np.float32)
 
     if offset_seconds >= 0:
+        # external starts after camera: pad ext at the front
         pad_samples = int(round(offset_seconds * sample_rate))
         aligned = np.zeros(n_cam, dtype=np.float32)
         start = pad_samples
@@ -356,6 +507,7 @@ def build_aligned_external(cam_audio: np.ndarray,
         end = min(n_cam, start + len(ext))
         aligned[start:end] = ext[: end - start]
     else:
+        # external starts before camera: trim leading part of ext
         lead_samples = int(round(-offset_seconds * sample_rate))
         if lead_samples >= len(ext):
             return np.zeros(n_cam, dtype=np.float32)
@@ -375,20 +527,20 @@ def process_clip_to_multitrack_mov(video_path: str,
     For a single clip:
       - Extract camera onboard audio
       - Align each external audio file
-      - Mux final .mov:
+      - Mux into a multi-track .mov
 
-        NON-RAW:
-          -c:v copy           (video untouched)
-          -c:a pcm_s16le      (multi-track audio)
+      Non-RAW:
+        -c:v copy (video untouched)
+        -c:a pcm_s16le (multi-track audio)
 
-        RAW (.braw, .r3d, .crm):
-          -c:v prores_ks      (ProRes 422 HQ proxy)
-          -c:a pcm_s16le
+      RAW (.braw, .r3d, .crm):
+        -c:v prores_ks -profile:v 3 (ProRes 422 HQ proxy)
+        -c:a pcm_s16le
     """
     ensure_ffmpeg()
 
     with tempfile.TemporaryDirectory() as workdir:
-        # Extract camera mono WAV for analysis
+        # Extract camera mono WAV
         cam_wav = os.path.join(workdir, "cam.wav")
         extract_mono_wav(video_path, cam_wav, sample_rate)
         cam_audio, sr_cam = load_audio_mono(cam_wav)
@@ -401,7 +553,7 @@ def process_clip_to_multitrack_mov(video_path: str,
             ext_audio, sr_ext = load_audio_mono(ext_wav)
 
             if sr_cam != sr_ext:
-                raise RuntimeError(f"Sample rate mismatch cam={sr_cam}, ext={sr_ext} after convert")
+                raise RuntimeError(f"Sample rate mismatch cam={sr_cam}, ext={sr_ext} after conversion")
 
             offset = estimate_offset_seconds(cam_audio, ext_audio, sr_cam)
             print(f"[Clip] {os.path.basename(video_path)} / "
@@ -417,32 +569,32 @@ def process_clip_to_multitrack_mov(video_path: str,
         for ap in aligned_paths:
             args += ["-i", ap]
 
-        # Map video + all audio streams
+        # Map video + original scratch audio + aligned tracks
         args += [
             "-map", "0:v:0",  # camera video
             "-map", "0:a:0",  # camera scratch audio (if present)
         ]
-
         for i in range(len(aligned_paths)):
-            args += ["-map", f"{i + 1}:a:0"]
+            args += ["-map", f"{i + 1}:a:0"]  # aligned externals
 
-        # Decide RAW vs NON-RAW behavior
+        # RAW vs non-RAW behavior
         ext = os.path.splitext(video_path)[1].lower()
         is_raw = ext in RAW_VIDEO_EXTS
 
         if is_raw:
-            # RAW -> ProRes 422 HQ proxy
+            # ProRes 422 HQ proxy for RAW footage
             args += [
                 "-c:v", "prores_ks",
                 "-profile:v", "3",           # 3 = ProRes 422 HQ
                 "-pix_fmt", "yuv422p10le",   # standard ProRes pixel format
             ]
         else:
-            # Non-RAW -> copy video stream
+            # For non-RAW, keep video stream untouched
             args += ["-c:v", "copy"]
 
+        # Audio: uncompressed PCM
         args += [
-            "-c:a", DEFAULT_AUDIO_CODEC,  # pcm_s16le
+            "-c:a", DEFAULT_AUDIO_CODEC,
             "-shortest",
             "-movflags", "+faststart",
             output_path,
@@ -451,17 +603,14 @@ def process_clip_to_multitrack_mov(video_path: str,
         run_ffmpeg(args)
 
 
-# ============================================================
-# HELPERS
-# ============================================================
-
 def classify_and_group_files(temp_dir, uploaded_files):
     """
     Save uploads to temp_dir, classify by extension, then group into clips.
 
     Clips are grouped by filename prefix before first underscore.
-      A001_cam.mp4  -> key A001
-      A001_zoom.wav -> key A001
+      Example:
+        A001_cam.mp4  -> key A001
+        A001_zoom.wav -> key A001
 
     Returns:
       clips: dict[clip_key] = { "videos": [...], "audios": [...] }
@@ -478,7 +627,7 @@ def classify_and_group_files(temp_dir, uploaded_files):
         storage.save(dest_path)
 
         base = os.path.splitext(filename)[0]
-        clip_key = base.split("_")[0]  # customize if needed
+        clip_key = base.split("_")[0]
 
         clip = clips.setdefault(clip_key, {"videos": [], "audios": []})
 
@@ -487,7 +636,7 @@ def classify_and_group_files(temp_dir, uploaded_files):
         elif ext in AUDIO_EXTS:
             clip["audios"].append(dest_path)
         else:
-            # Unknown file type -> ignore
+            # ignore unknown types
             pass
 
     return clips
@@ -518,11 +667,11 @@ def sync_route():
             videos = clip_data["videos"]
             audios = clip_data["audios"]
 
+            # Need at least one video + one audio for a valid clip
             if not videos or not audios:
-                # Need at least one video and one external audio per clip
                 continue
 
-            video_path = videos[0]  # use first video as reference
+            video_path = videos[0]  # first video as reference
             ext_paths = audios
 
             out_name = f"{clip_key}_synced.mov"
@@ -533,9 +682,8 @@ def sync_route():
 
         if not outputs:
             return (
-                "No valid clip groups found. "
-                "Make sure each clip has at least one video file and one audio file, "
-                "with matching filename prefixes (e.g. SC01_T01_cam.mp4 & SC01_T01_zoom.wav).",
+                "No valid clip groups found. Each clip needs at least one video and one audio file "
+                "with matching prefixes (e.g., SC01_T01_cam.mp4 & SC01_T01_zoom.wav).",
                 400,
             )
 
@@ -561,8 +709,7 @@ def sync_route():
             )
 
     finally:
-        # For production you may want a background cleanup job for tmp dirs.
-        # Here we leave tmpdir for OS/user to clean if needed.
+        # For now we leave temp dirs for OS cleanup; can add explicit cleanup if desired
         pass
 
 
@@ -571,11 +718,7 @@ def sync_route():
 # ============================================================
 
 if __name__ == "__main__":
-    # For production:
-    #   - Run behind a WSGI server like gunicorn or uWSGI
-    #   - Example: gunicorn -w 4 -b 0.0.0.0:8000 app:app
-    #
-    # Dev / local:
-    #   python app.py
-    #   Visit http://localhost:5000
+    # Dev mode: python app.py
+    # For production, run via gunicorn, e.g.:
+    #   gunicorn -b 127.0.0.1:8000 app:app
     app.run(host="0.0.0.0", port=5000, debug=True)
