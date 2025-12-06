@@ -46,14 +46,16 @@ AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac"}
 ANALYSIS_SAMPLE_RATE = 48000  # standard video-post sample rate
 DEFAULT_AUDIO_CODEC = "pcm_s16le"  # uncompressed PCM
 
-# Flask app
+# Payment settings (front-end gating only)
+PAY_PER_JOB_AMOUNT = "7.00"  # USD
+PAYMENT_REQUIRED = True      # set to False to disable gating while testing
+
 app = Flask(__name__)
-# Allow up to ~8 GB upload per request (adjust as needed)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024 * 1024  # 8GB
 
 
 # ============================================================
-# FRONTEND (VIM Media branded, with progress overlay)
+# FRONTEND (VIM Media branded, pricing + PayPal)
 # ============================================================
 
 INDEX_HTML = """
@@ -108,9 +110,14 @@ INDEX_HTML = """
       to   { background-position: -200% 0; }
     }
   </style>
+
+  <!-- PayPal SDK (replace YOUR_PAYPAL_CLIENT_ID_HERE with your real client id) -->
+  <script src="https://www.paypal.com/sdk/js?client-id=YOUR_PAYPAL_CLIENT_ID_HERE&currency=USD"></script>
 </head>
-<body class="min-h-screen flex items-center justify-center px-4 py-10">
-  <div class="w-full max-w-4xl bg-watchBlack/90 border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8 relative">
+<body class="min-h-screen flex flex-col items-center px-4 py-10 gap-10">
+
+  <!-- MAIN CARD -->
+  <div class="w-full max-w-5xl bg-watchBlack/90 border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8 relative">
     <!-- Header -->
     <header class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-3">
@@ -133,6 +140,10 @@ INDEX_HTML = """
       </div>
 
       <div class="flex flex-col items-end gap-1">
+        <a href="#pricing"
+           class="inline-flex items-center text-xs font-semibold text-slate-300 hover:text-watchGold">
+          View pricing &rsaquo;
+        </a>
         <a href="https://watchvim.com" target="_blank"
            class="hidden sm:inline-flex items-center text-xs font-semibold text-watchGold hover:text-white">
           watchvim.com &rsaquo;
@@ -145,7 +156,7 @@ INDEX_HTML = """
     </header>
 
     <!-- Description + What this clip will contain -->
-    <section class="mb-6 grid gap-4 md:grid-cols-[minmax(0,2fr),minmax(0,1.5fr)]">
+    <section class="mb-6 grid gap-4 md:grid-cols-[minmax(0,1.6fr),minmax(0,1.4fr)]">
       <div class="text-sm text-slate-200 space-y-2">
         <p>
           Upload your camera clips and external audio files. This service automatically
@@ -181,7 +192,7 @@ INDEX_HTML = """
             <div>
               <span class="font-semibold text-slate-100">Track 2+ – External recorders</span><br/>
               <span class="text-slate-400">
-                Each external WAV/recorder upload becomes its own synced track for mixing.
+                Each external recorder file becomes its own synced track for mixing.
               </span>
             </div>
           </li>
@@ -199,45 +210,86 @@ INDEX_HTML = """
       </div>
     </section>
 
-    <!-- File summary -->
-    <section class="mb-4">
-      <h2 class="text-xs font-semibold text-slate-300 uppercase tracking-wide mb-1">
-        Selected files
-      </h2>
-      <div id="fileList" class="text-xs text-slate-400 border border-white/5 rounded-lg p-3 min-h-[3rem] bg-black/30">
-        <span class="text-slate-500">No files selected yet.</span>
-      </div>
-    </section>
-
-    <!-- Upload Form -->
-    <form id="uploadForm" class="space-y-5">
+    <!-- File summary + Upload / Pay-per-job -->
+    <section class="grid gap-5 lg:grid-cols-[minmax(0,1.4fr),minmax(0,1.1fr)] items-start">
+      <!-- Left: upload & PayPal -->
       <div>
-        <label class="block text-sm font-medium mb-1">Upload media</label>
-        <input id="files" name="files" type="file" multiple
-               class="block w-full text-sm text-slate-100
-                      file:mr-3 file:py-2 file:px-4
-                      file:rounded-md file:border-0
-                      file:text-sm file:font-semibold
-                      file:bg-watchRed file:text-white
-                      hover:file:bg-red-700
-                      cursor-pointer" />
-        <p class="mt-2 text-xs text-slate-400">
-          Include camera video (.mp4, .mov, .mxf, .braw, .r3d, .crm) and matching
-          external audio (.wav, .mp3, .m4a, etc.). Use matching prefixes
-          (e.g. <code>SC01_T01_cam.mp4</code> and <code>SC01_T01_zoom.wav</code>).
+        <!-- File summary -->
+        <div class="mb-4">
+          <h2 class="text-xs font-semibold text-slate-300 uppercase tracking-wide mb-1">
+            Selected files
+          </h2>
+          <div id="fileList" class="text-xs text-slate-400 border border-white/5 rounded-lg p-3 min-h-[3rem] bg-black/30">
+            <span class="text-slate-500">No files selected yet.</span>
+          </div>
+        </div>
+
+        <!-- Upload Form -->
+        <form id="uploadForm" class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium mb-1">Upload media</label>
+            <input id="files" name="files" type="file" multiple
+                   class="block w-full text-sm text-slate-100
+                          file:mr-3 file:py-2 file:px-4
+                          file:rounded-md file:border-0
+                          file:text-sm file:font-semibold
+                          file:bg-watchRed file:text-white
+                          hover:file:bg-red-700
+                          cursor-pointer" />
+            <p class="mt-2 text-xs text-slate-400">
+              Include camera video (.mp4, .mov, .mxf, .braw, .r3d, .crm) and matching
+              external audio (.wav, .mp3, .m4a, etc.). Use matching prefixes
+              (e.g. <code>SC01_T01_cam.mp4</code> and <code>SC01_T01_zoom.wav</code>).
+            </p>
+          </div>
+
+          <button id="syncButton" type="submit"
+                  class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full
+                         bg-watchGold text-black text-sm font-semibold
+                         hover:bg-yellow-400 transition disabled:opacity-60 disabled:cursor-not-allowed">
+            <span>Sync &amp; Download</span>
+          </button>
+
+          <div id="status" class="mt-2 text-xs sm:text-sm text-slate-300 min-h-[1.5rem]"></div>
+        </form>
+      </div>
+
+      <!-- Right: Pay-per-job + explainer -->
+      <div class="bg-black/40 border border-watchGold/20 rounded-2xl p-4 space-y-3">
+        <h3 class="text-sm font-semibold text-watchGold">
+          Pay-per-job · $7 per sync
+        </h3>
+        <p class="text-xs text-slate-300">
+          Don&apos;t need a monthly plan yet? Pay once per job and let VIM Media handle
+          the sync work for this upload.
+        </p>
+
+        <div class="text-[11px] text-slate-400 space-y-1">
+          <p>Includes:</p>
+          <ul class="list-disc pl-4 space-y-0.5">
+            <li>One synced multi-track <code>.mov</code> (or ZIP for multiple clips)</li>
+            <li>Support for standard & RAW formats</li>
+            <li>Scratch + external tracks for mixing in your NLE</li>
+          </ul>
+        </div>
+
+        <div class="mt-2">
+          <div id="paypal-button-container"></div>
+          <p id="paymentStatus" class="mt-2 text-[11px] text-slate-400">
+            Complete payment to unlock syncing for this job.
+          </p>
+        </div>
+
+        <p class="text-[11px] text-slate-500 border-t border-white/10 pt-3 mt-2">
+          Already on an Indie / Studio / Pro plan? You&apos;ll soon be able to log in
+          and sync without Pay-per-job. For now, teams can contact
+          <a href="mailto:streaming@watchvim.com" class="underline hover:text-watchGold">
+            streaming@watchvim.com
+          </a>
+          for studio access.
         </p>
       </div>
-
-      <button id="syncButton" type="submit"
-              class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full
-                     bg-watchGold text-black text-sm font-semibold
-                     hover:bg-yellow-400 transition disabled:opacity-60 disabled:cursor-not-allowed">
-        <span>Sync &amp; Download</span>
-      </button>
-    </form>
-
-    <!-- Status text -->
-    <div id="status" class="mt-4 text-xs sm:text-sm text-slate-300 min-h-[1.5rem]"></div>
+    </section>
 
     <!-- Footer -->
     <footer class="mt-6 border-t border-white/10 pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
@@ -284,9 +336,109 @@ INDEX_HTML = """
     </div>
   </div>
 
+  <!-- PRICING SECTION -->
+  <section id="pricing" class="w-full max-w-5xl">
+    <div class="mb-4 flex items-center justify-between">
+      <div>
+        <h2 class="text-lg sm:text-xl font-semibold text-slate-100">
+          Pricing built for indie creators up to full studios
+        </h2>
+        <p class="text-xs sm:text-sm text-slate-400">
+          Start with Pay-per-job or move into monthly tiers as your pipeline grows.
+        </p>
+      </div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <!-- Indie Creator -->
+      <div class="bg-watchBlack/90 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold text-slate-100">Indie Creator</h3>
+          <p class="text-xl font-bold text-watchGold">$24<span class="text-xs text-slate-400">/month</span></p>
+          <p class="text-[11px] text-slate-400">
+            For solo editors, micro-budget films, and YouTubers.
+          </p>
+          <ul class="mt-2 text-[11px] text-slate-300 space-y-1">
+            <li>Up to 50 sync jobs / month</li>
+            <li>~300 GB transfer</li>
+            <li>Standard processing priority</li>
+            <li>Up to 6 audio tracks per clip</li>
+          </ul>
+        </div>
+        <a href="mailto:streaming@watchvim.com?subject=Indie%20Creator%20AudioSync"
+           class="mt-3 inline-flex justify-center rounded-full border border-watchGold/80 px-3 py-1.5 text-[11px] font-semibold text-watchGold hover:bg-watchGold hover:text-black">
+          Talk to VIM about Indie
+        </a>
+      </div>
+
+      <!-- Studio -->
+      <div class="bg-watchBlack/90 border border-watchGold/60 rounded-2xl p-4 flex flex-col justify-between">
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold text-slate-100">Studio</h3>
+          <p class="text-xl font-bold text-watchGold">$79<span class="text-xs text-slate-400">/month</span></p>
+          <p class="text-[11px] text-slate-400">
+            For boutique production companies and small agencies.
+          </p>
+          <ul class="mt-2 text-[11px] text-slate-300 space-y-1">
+            <li>Up to 250 sync jobs / month</li>
+            <li>~1 TB transfer</li>
+            <li>Higher queue priority</li>
+            <li>3–5 team seats</li>
+          </ul>
+        </div>
+        <a href="mailto:streaming@watchvim.com?subject=Studio%20AudioSync"
+           class="mt-3 inline-flex justify-center rounded-full bg-watchGold px-3 py-1.5 text-[11px] font-semibold text-black hover:bg-yellow-400">
+          Talk to VIM about Studio
+        </a>
+      </div>
+
+      <!-- Pro Studio -->
+      <div class="bg-watchBlack/90 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold text-slate-100">Pro Studio</h3>
+          <p class="text-xl font-bold text-watchGold">$199<span class="text-xs text-slate-400">/month</span></p>
+          <p class="text-[11px] text-slate-400">
+            For serious series work, agency pipelines, and high-volume teams.
+          </p>
+          <ul class="mt-2 text-[11px] text-slate-300 space-y-1">
+            <li>Up to 750 sync jobs / month</li>
+            <li>5+ TB transfer</li>
+            <li>Highest shared priority</li>
+            <li>Up to 15 seats + API access</li>
+          </ul>
+        </div>
+        <a href="mailto:streaming@watchvim.com?subject=Pro%20Studio%20AudioSync"
+           class="mt-3 inline-flex justify-center rounded-full border border-watchGold/80 px-3 py-1.5 text-[11px] font-semibold text-watchGold hover:bg-watchGold hover:text-black">
+          Talk to VIM about Pro Studio
+        </a>
+      </div>
+
+      <!-- Enterprise -->
+      <div class="bg-watchBlack/90 border border-white/10 rounded-2xl p-4 flex flex-col justify-between">
+        <div class="space-y-1">
+          <h3 class="text-sm font-semibold text-slate-100">Enterprise</h3>
+          <p class="text-xl font-bold text-watchGold">Let&apos;s talk</p>
+          <p class="text-[11px] text-slate-400">
+            For networks, OTT platforms, post houses, and cloud MAM vendors.
+          </p>
+          <ul class="mt-2 text-[11px] text-slate-300 space-y-1">
+            <li>Custom volume &amp; private infrastructure</li>
+            <li>SSO / SAML, SLAs, dedicated support</li>
+            <li>Integrations &amp; custom feature work</li>
+          </ul>
+        </div>
+        <a href="mailto:streaming@watchvim.com?subject=Enterprise%20AudioSync"
+           class="mt-3 inline-flex justify-center rounded-full border border-slate-500 px-3 py-1.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-200 hover:text-black">
+          Contact VIM for Enterprise
+        </a>
+      </div>
+    </div>
+  </section>
+
   <script>
     document.getElementById('year').textContent = new Date().getFullYear();
 
+    const PAYMENT_REQUIRED = %s;  // injected below from Python
     const form = document.getElementById('uploadForm');
     const statusEl = document.getElementById('status');
     const filesInput = document.getElementById('files');
@@ -295,9 +447,19 @@ INDEX_HTML = """
     const overlay = document.getElementById('processingOverlay');
     const processingStep = document.getElementById('processingStep');
     const processingSub = document.getElementById('processingSub');
+    const paymentStatusEl = document.getElementById('paymentStatus');
 
     let overlayTimer = null;
     let isProcessing = false;
+    let hasPaid = !PAYMENT_REQUIRED;  // if payment not required, treat as paid
+
+    // Initial sync button state
+    if (PAYMENT_REQUIRED) {
+      syncButton.disabled = true;
+      paymentStatusEl.textContent = 'Complete payment to unlock syncing for this job.';
+    } else {
+      paymentStatusEl.textContent = 'Payment is disabled in this environment (testing mode).';
+    }
 
     function renderFileList(files) {
       if (!files.length) {
@@ -328,7 +490,6 @@ INDEX_HTML = """
     function showOverlay() {
       isProcessing = true;
       overlay.classList.remove('hidden');
-      syncButton.disabled = true;
 
       const steps = [
         ['Step 1/3: Uploading your media…', 'Large RAW and 4K files may take a little longer to reach our servers.'],
@@ -352,8 +513,43 @@ INDEX_HTML = """
     function hideOverlay() {
       isProcessing = false;
       overlay.classList.add('hidden');
-      syncButton.disabled = false;
       if (overlayTimer) clearInterval(overlayTimer);
+    }
+
+    // PayPal buttons (guarded in case SDK fails to load)
+    if (window.paypal && PAYMENT_REQUIRED) {
+      paypal.Buttons({
+        style: {
+          layout: 'horizontal',
+          color: 'gold',
+          shape: 'pill',
+          label: 'pay'
+        },
+        createOrder: function(data, actions) {
+          return actions.order.create({
+            purchase_units: [{
+              description: 'VIM Media AudioSync Pay-per-Job',
+              amount: { value: '%s' }
+            }]
+          });
+        },
+        onApprove: function(data, actions) {
+          return actions.order.capture().then(function(details) {
+            hasPaid = true;
+            syncButton.disabled = false;
+            paymentStatusEl.textContent = 'Payment received. You can now upload and sync this job.';
+          });
+        },
+        onCancel: function() {
+          paymentStatusEl.textContent = 'Payment cancelled. You can try again when ready.';
+        },
+        onError: function(err) {
+          console.error(err);
+          paymentStatusEl.textContent = 'There was an error with PayPal. Please try again.';
+        }
+      }).render('#paypal-button-container');
+    } else if (!PAYMENT_REQUIRED) {
+      paymentStatusEl.textContent = 'Payment is disabled in this environment (testing mode).';
     }
 
     form.addEventListener('submit', async (e) => {
@@ -361,6 +557,11 @@ INDEX_HTML = """
 
       if (!filesInput.files.length) {
         alert('Please select at least one file.');
+        return;
+      }
+
+      if (!hasPaid) {
+        alert('Please complete the Pay-per-job payment before syncing.');
         return;
       }
 
@@ -415,7 +616,7 @@ INDEX_HTML = """
   </script>
 </body>
 </html>
-"""
+""" % ("true" if PAYMENT_REQUIRED else "false", PAY_PER_JOB_AMOUNT)
 
 
 # ============================================================
@@ -439,10 +640,7 @@ def run_ffmpeg(args):
 
 
 def extract_mono_wav(input_path: str, output_path: str, sample_rate: int = ANALYSIS_SAMPLE_RATE):
-    """
-    Extract / convert audio from any media to mono WAV at a fixed sample rate.
-    Used only for analysis, not for final delivery.
-    """
+    """Extract / convert audio from any media to mono WAV at a fixed sample rate."""
     run_ffmpeg([
         "-i", input_path,
         "-ac", "1",
@@ -498,7 +696,6 @@ def build_aligned_external(cam_audio: np.ndarray,
     ext = ext_audio.astype(np.float32)
 
     if offset_seconds >= 0:
-        # external starts after camera: pad ext at the front
         pad_samples = int(round(offset_seconds * sample_rate))
         aligned = np.zeros(n_cam, dtype=np.float32)
         start = pad_samples
@@ -507,7 +704,6 @@ def build_aligned_external(cam_audio: np.ndarray,
         end = min(n_cam, start + len(ext))
         aligned[start:end] = ext[: end - start]
     else:
-        # external starts before camera: trim leading part of ext
         lead_samples = int(round(-offset_seconds * sample_rate))
         if lead_samples >= len(ext):
             return np.zeros(n_cam, dtype=np.float32)
@@ -540,7 +736,6 @@ def process_clip_to_multitrack_mov(video_path: str,
     ensure_ffmpeg()
 
     with tempfile.TemporaryDirectory() as workdir:
-        # Extract camera mono WAV
         cam_wav = os.path.join(workdir, "cam.wav")
         extract_mono_wav(video_path, cam_wav, sample_rate)
         cam_audio, sr_cam = load_audio_mono(cam_wav)
@@ -564,12 +759,10 @@ def process_clip_to_multitrack_mov(video_path: str,
             sf.write(aligned_wav, aligned_ext, sr_cam, subtype="PCM_16")
             aligned_paths.append(aligned_wav)
 
-        # Build ffmpeg command
         args = ["-i", video_path]
         for ap in aligned_paths:
             args += ["-i", ap]
 
-        # Map video + original scratch audio + aligned tracks
         args += [
             "-map", "0:v:0",  # camera video
             "-map", "0:a:0",  # camera scratch audio (if present)
@@ -577,22 +770,18 @@ def process_clip_to_multitrack_mov(video_path: str,
         for i in range(len(aligned_paths)):
             args += ["-map", f"{i + 1}:a:0"]  # aligned externals
 
-        # RAW vs non-RAW behavior
         ext = os.path.splitext(video_path)[1].lower()
         is_raw = ext in RAW_VIDEO_EXTS
 
         if is_raw:
-            # ProRes 422 HQ proxy for RAW footage
             args += [
                 "-c:v", "prores_ks",
-                "-profile:v", "3",           # 3 = ProRes 422 HQ
-                "-pix_fmt", "yuv422p10le",   # standard ProRes pixel format
+                "-profile:v", "3",
+                "-pix_fmt", "yuv422p10le",
             ]
         else:
-            # For non-RAW, keep video stream untouched
             args += ["-c:v", "copy"]
 
-        # Audio: uncompressed PCM
         args += [
             "-c:a", DEFAULT_AUDIO_CODEC,
             "-shortest",
@@ -611,9 +800,6 @@ def classify_and_group_files(temp_dir, uploaded_files):
       Example:
         A001_cam.mp4  -> key A001
         A001_zoom.wav -> key A001
-
-    Returns:
-      clips: dict[clip_key] = { "videos": [...], "audios": [...] }
     """
     clips = {}
 
@@ -667,11 +853,10 @@ def sync_route():
             videos = clip_data["videos"]
             audios = clip_data["audios"]
 
-            # Need at least one video + one audio for a valid clip
             if not videos or not audios:
                 continue
 
-            video_path = videos[0]  # first video as reference
+            video_path = videos[0]
             ext_paths = audios
 
             out_name = f"{clip_key}_synced.mov"
@@ -709,7 +894,7 @@ def sync_route():
             )
 
     finally:
-        # For now we leave temp dirs for OS cleanup; can add explicit cleanup if desired
+        # OS will eventually clean up temp dirs; explicit cleanup can be added later.
         pass
 
 
@@ -718,7 +903,5 @@ def sync_route():
 # ============================================================
 
 if __name__ == "__main__":
-    # Dev mode: python app.py
-    # For production, run via gunicorn, e.g.:
-    #   gunicorn -b 127.0.0.1:8000 app:app
+    # Dev mode
     app.run(host="0.0.0.0", port=5000, debug=True)
