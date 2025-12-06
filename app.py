@@ -112,7 +112,7 @@ INDEX_HTML = """
   </style>
 
   <!-- PayPal SDK (AQC5qjaOAHkOLQvTh8fKm_zeV0Wfv9_pUvxk8DQQqUgu6E_KhQVpnJxMKC7MxzM_2PpA3jYpExdJXin5) -->
-  <script src="https://www.paypal.com/sdk/js?client-id=YOUR_PAYPAL_CLIENT_ID_HERE&currency=USD"></script>
+  <script src="https://www.paypal.com/sdk/js?client-id=AQC5qjaOAHkOLQvTh8fKm_zeV0Wfv9_pUvxk8DQQqUgu6E_KhQVpnJxMKC7MxzM_2PpA3jYpExdJXin5&currency=USD"></script>
 </head>
 <body class="min-h-screen flex flex-col items-center px-4 py-10 gap-10">
 
