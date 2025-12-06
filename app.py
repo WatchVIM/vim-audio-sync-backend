@@ -29,7 +29,6 @@ from scipy.signal import correlate
 # CONFIG
 # ============================================================
 
-# Video formats we accept
 VIDEO_EXTS = {
     ".mp4", ".mov", ".mxf", ".avi", ".mkv",
     ".braw",  # Blackmagic RAW
@@ -37,18 +36,12 @@ VIDEO_EXTS = {
     ".crm",   # Canon Cinema RAW
 }
 
-# RAW formats that get proxied to ProRes 422 HQ
 RAW_VIDEO_EXTS = {".braw", ".r3d", ".crm"}
 
-# Audio formats we accept
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".aac", ".flac"}
 
-ANALYSIS_SAMPLE_RATE = 48000  # standard video-post sample rate
-DEFAULT_AUDIO_CODEC = "pcm_s16le"  # uncompressed PCM
-
-# Payment settings (front-end gating only)
-PAY_PER_JOB_AMOUNT = "7.00"  # USD
-PAYMENT_REQUIRED = True      # set to False to disable gating while testing
+ANALYSIS_SAMPLE_RATE = 48000
+DEFAULT_AUDIO_CODEC = "pcm_s16le"
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 8 * 1024 * 1024 * 1024  # 8GB
@@ -111,8 +104,8 @@ INDEX_HTML = """
     }
   </style>
 
-  <!-- PayPal SDK (AQC5qjaOAHkOLQvTh8fKm_zeV0Wfv9_pUvxk8DQQqUgu6E_KhQVpnJxMKC7MxzM_2PpA3jYpExdJXin5) -->
-  <script src="https://www.paypal.com/sdk/js?client-id=AQC5qjaOAHkOLQvTh8fKm_zeV0Wfv9_pUvxk8DQQqUgu6E_KhQVpnJxMKC7MxzM_2PpA3jYpExdJXin5&currency=USD"></script>
+  <!-- PayPal SDK: replace YOUR_PAYPAL_CLIENT_ID_HERE with your real client id -->
+  <script src="https://www.paypal.com/sdk/js?client-id=YOUR_PAYPAL_CLIENT_ID_HERE&currency=USD"></script>
 </head>
 <body class="min-h-screen flex flex-col items-center px-4 py-10 gap-10">
 
@@ -212,7 +205,7 @@ INDEX_HTML = """
 
     <!-- File summary + Upload / Pay-per-job -->
     <section class="grid gap-5 lg:grid-cols-[minmax(0,1.4fr),minmax(0,1.1fr)] items-start">
-      <!-- Left: upload & PayPal -->
+      <!-- Left: upload & status -->
       <div>
         <!-- File summary -->
         <div class="mb-4">
@@ -254,7 +247,7 @@ INDEX_HTML = """
         </form>
       </div>
 
-      <!-- Right: Pay-per-job + explainer -->
+      <!-- Right: Pay-per-job -->
       <div class="bg-black/40 border border-watchGold/20 rounded-2xl p-4 space-y-3">
         <h3 class="text-sm font-semibold text-watchGold">
           Pay-per-job · $7 per sync
@@ -268,7 +261,7 @@ INDEX_HTML = """
           <p>Includes:</p>
           <ul class="list-disc pl-4 space-y-0.5">
             <li>One synced multi-track <code>.mov</code> (or ZIP for multiple clips)</li>
-            <li>Support for standard & RAW formats</li>
+            <li>Support for standard &amp; RAW formats</li>
             <li>Scratch + external tracks for mixing in your NLE</li>
           </ul>
         </div>
@@ -438,7 +431,10 @@ INDEX_HTML = """
   <script>
     document.getElementById('year').textContent = new Date().getFullYear();
 
-    const PAYMENT_REQUIRED = %s;  // injected below from Python
+    // Payment config (change here if needed)
+    const PAYMENT_REQUIRED = true;      // set to false for testing without PayPal
+    const PAY_PER_JOB_AMOUNT = "7.00";  // USD as string
+
     const form = document.getElementById('uploadForm');
     const statusEl = document.getElementById('status');
     const filesInput = document.getElementById('files');
@@ -453,7 +449,6 @@ INDEX_HTML = """
     let isProcessing = false;
     let hasPaid = !PAYMENT_REQUIRED;  // if payment not required, treat as paid
 
-    // Initial sync button state
     if (PAYMENT_REQUIRED) {
       syncButton.disabled = true;
       paymentStatusEl.textContent = 'Complete payment to unlock syncing for this job.';
@@ -516,7 +511,7 @@ INDEX_HTML = """
       if (overlayTimer) clearInterval(overlayTimer);
     }
 
-    // PayPal buttons (guarded in case SDK fails to load)
+    // PayPal buttons
     if (window.paypal && PAYMENT_REQUIRED) {
       paypal.Buttons({
         style: {
@@ -529,7 +524,7 @@ INDEX_HTML = """
           return actions.order.create({
             purchase_units: [{
               description: 'VIM Media AudioSync Pay-per-Job',
-              amount: { value: '%s' }
+              amount: { value: PAY_PER_JOB_AMOUNT }
             }]
           });
         },
@@ -616,7 +611,7 @@ INDEX_HTML = """
   </script>
 </body>
 </html>
-""" % ("true" if PAYMENT_REQUIRED else "false", PAY_PER_JOB_AMOUNT)
+"""
 
 
 # ============================================================
@@ -624,13 +619,11 @@ INDEX_HTML = """
 # ============================================================
 
 def ensure_ffmpeg():
-    """Ensure ffmpeg is installed and on PATH."""
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found on PATH. Install ffmpeg on your server.")
 
 
 def run_ffmpeg(args):
-    """Run ffmpeg with -y and provided args; raise on error."""
     cmd = ["ffmpeg", "-y"] + args
     print("Running:", " ".join(cmd))
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -640,7 +633,6 @@ def run_ffmpeg(args):
 
 
 def extract_mono_wav(input_path: str, output_path: str, sample_rate: int = ANALYSIS_SAMPLE_RATE):
-    """Extract / convert audio from any media to mono WAV at a fixed sample rate."""
     run_ffmpeg([
         "-i", input_path,
         "-ac", "1",
@@ -651,7 +643,6 @@ def extract_mono_wav(input_path: str, output_path: str, sample_rate: int = ANALY
 
 
 def load_audio_mono(path: str):
-    """Load mono WAV as float32 numpy array and sample rate."""
     data, sr = sf.read(path)
     if data.ndim > 1:
         data = data.mean(axis=1)
@@ -662,13 +653,6 @@ def load_audio_mono(path: str):
 def estimate_offset_seconds(cam_audio: np.ndarray,
                             ext_audio: np.ndarray,
                             sample_rate: int) -> float:
-    """
-    Estimate time offset between camera audio and external audio via cross-correlation.
-
-    Returns offset in seconds:
-      > 0: external starts later than camera
-      < 0: external starts earlier than camera
-    """
     cam = cam_audio.astype(np.float32)
     ext = ext_audio.astype(np.float32)
 
@@ -689,9 +673,6 @@ def build_aligned_external(cam_audio: np.ndarray,
                            ext_audio: np.ndarray,
                            sample_rate: int,
                            offset_seconds: float) -> np.ndarray:
-    """
-    Build external audio waveform aligned to camera audio length.
-    """
     n_cam = len(cam_audio)
     ext = ext_audio.astype(np.float32)
 
@@ -719,20 +700,6 @@ def process_clip_to_multitrack_mov(video_path: str,
                                    external_audio_paths,
                                    output_path: str,
                                    sample_rate: int = ANALYSIS_SAMPLE_RATE):
-    """
-    For a single clip:
-      - Extract camera onboard audio
-      - Align each external audio file
-      - Mux into a multi-track .mov
-
-      Non-RAW:
-        -c:v copy (video untouched)
-        -c:a pcm_s16le (multi-track audio)
-
-      RAW (.braw, .r3d, .crm):
-        -c:v prores_ks -profile:v 3 (ProRes 422 HQ proxy)
-        -c:a pcm_s16le
-    """
     ensure_ffmpeg()
 
     with tempfile.TemporaryDirectory() as workdir:
@@ -764,11 +731,11 @@ def process_clip_to_multitrack_mov(video_path: str,
             args += ["-i", ap]
 
         args += [
-            "-map", "0:v:0",  # camera video
-            "-map", "0:a:0",  # camera scratch audio (if present)
+            "-map", "0:v:0",
+            "-map", "0:a:0",
         ]
         for i in range(len(aligned_paths)):
-            args += ["-map", f"{i + 1}:a:0"]  # aligned externals
+            args += ["-map", f"{i + 1}:a:0"]
 
         ext = os.path.splitext(video_path)[1].lower()
         is_raw = ext in RAW_VIDEO_EXTS
@@ -793,14 +760,6 @@ def process_clip_to_multitrack_mov(video_path: str,
 
 
 def classify_and_group_files(temp_dir, uploaded_files):
-    """
-    Save uploads to temp_dir, classify by extension, then group into clips.
-
-    Clips are grouped by filename prefix before first underscore.
-      Example:
-        A001_cam.mp4  -> key A001
-        A001_zoom.wav -> key A001
-    """
     clips = {}
 
     for storage in uploaded_files:
@@ -821,9 +780,6 @@ def classify_and_group_files(temp_dir, uploaded_files):
             clip["videos"].append(dest_path)
         elif ext in AUDIO_EXTS:
             clip["audios"].append(dest_path)
-        else:
-            # ignore unknown types
-            pass
 
     return clips
 
@@ -892,9 +848,7 @@ def sync_route():
                 download_name="synced_clips.zip",
                 mimetype="application/zip",
             )
-
     finally:
-        # OS will eventually clean up temp dirs; explicit cleanup can be added later.
         pass
 
 
@@ -903,5 +857,4 @@ def sync_route():
 # ============================================================
 
 if __name__ == "__main__":
-    # Dev mode
     app.run(host="0.0.0.0", port=5000, debug=True)
