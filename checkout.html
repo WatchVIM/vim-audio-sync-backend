@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VIM AudioSync – Checkout</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Tailwind (optional, for quick styling) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        background: #050505;
+        color: #f9fafb;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen flex items-center justify-center">
+    <div class="max-w-3xl w-full px-4 py-8">
+      <!-- Header -->
+      <header class="mb-6 flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">
+            VIM AudioSync – Checkout
+          </h1>
+          <p class="text-sm text-gray-400 mt-1">
+            Choose your subscription tier to unlock download access for this job.
+          </p>
+          <p id="job-label" class="text-xs text-gray-500 mt-2"></p>
+        </div>
+        <div class="text-xs text-gray-500 uppercase tracking-[0.2em]">
+          VIM MEDIA
+        </div>
+      </header>
+
+      <!-- Status -->
+      <div
+        id="status"
+        class="mb-4 text-xs text-gray-300 bg-black/30 border border-gray-800 rounded-lg px-3 py-2"
+      >
+        Loading checkout configuration…
+      </div>
+
+      <!-- Plans grid -->
+      <section class="grid gap-4 md:grid-cols-3" id="plans-section" style="display:none;">
+        <!-- Indie -->
+        <div class="bg-black/50 border border-gray-800 rounded-xl p-4 flex flex-col">
+          <h2 class="text-lg font-semibold mb-1">Indie</h2>
+          <p class="text-xs text-gray-400 mb-3">
+            Perfect for solo creators and indie productions.
+          </p>
+          <div class="text-sm text-gray-300 mb-4">
+            <p class="font-mono">Plan ID:</p>
+            <p id="indie-plan" class="text-[11px] text-gray-500 break-all"></p>
+          </div>
+          <div id="paypal-indie-button" class="mt-auto"></div>
+        </div>
+
+        <!-- Studio -->
+        <div class="bg-black/50 border border-gray-800 rounded-xl p-4 flex flex-col">
+          <h2 class="text-lg font-semibold mb-1">Studio</h2>
+          <p class="text-xs text-gray-400 mb-3">
+            For teams working on multiple projects each month.
+          </p>
+          <div class="text-sm text-gray-300 mb-4">
+            <p class="font-mono">Plan ID:</p>
+            <p id="studio-plan" class="text-[11px] text-gray-500 break-all"></p>
+          </div>
+          <div id="paypal-studio-button" class="mt-auto"></div>
+        </div>
+
+        <!-- Pro Studio -->
+        <div class="bg-black/50 border border-gray-800 rounded-xl p-4 flex flex-col">
+          <h2 class="text-lg font-semibold mb-1">Pro Studio</h2>
+          <p class="text-xs text-gray-400 mb-3">
+            High-volume productions and post houses.
+          </p>
+          <div class="text-sm text-gray-300 mb-4">
+            <p class="font-mono">Plan ID:</p>
+            <p id="pro-plan" class="text-[11px] text-gray-500 break-all"></p>
+          </div>
+          <div id="paypal-pro-button" class="mt-auto"></div>
+        </div>
+      </section>
+
+      <!-- Back link -->
+      <div class="mt-6 text-xs text-gray-500">
+        <button
+          type="button"
+          onclick="window.history.back()"
+          class="underline underline-offset-2 hover:text-gray-300"
+        >
+          &larr; Back to previous page
+        </button>
+      </div>
+    </div>
+
+    <script>
+      // ----------------------------------------------------------
+      // Helpers
+      // ----------------------------------------------------------
+      function getJobIdFromQuery() {
+        const params = new URLSearchParams(window.location.search);
+        const id = params.get("jobId");
+        return id ? parseInt(id, 10) : null;
+      }
+
+      function setStatus(message, isError) {
+        const statusEl = document.getElementById("status");
+        statusEl.textContent = message;
+        statusEl.classList.toggle("text-rose-400", !!isError);
+        statusEl.classList.toggle("text-emerald-400", !isError);
+      }
+
+      function loadPayPalScript(clientId) {
+        return new Promise((resolve, reject) => {
+          if (window.paypal) return resolve(window.paypal);
+          const script = document.createElement("script");
+          script.src =
+            "https://www.paypal.com/sdk/js?client-id=" +
+            encodeURIComponent(clientId) +
+            "&vault=true&intent=subscription";
+          script.onload = () => resolve(window.paypal);
+          script.onerror = () => reject(new Error("Failed to load PayPal SDK"));
+          document.body.appendChild(script);
+        });
+      }
+
+      // ----------------------------------------------------------
+      // Main
+      // ----------------------------------------------------------
+      (async function initCheckout() {
+        const jobId = getJobIdFromQuery();
+        const jobLabel = document.getElementById("job-label");
+
+        if (!jobId) {
+          setStatus("Missing jobId in the URL (?jobId=123).", true);
+          jobLabel.textContent = "";
+          return;
+        }
+
+        jobLabel.textContent = "Job ID: #" + jobId;
+
+        try {
+          // Fetch backend config
+          const configRes = await fetch("/config");
+          if (!configRes.ok) {
+            throw new Error("Unable to fetch /config");
+          }
+
+          const config = await configRes.json();
+          const clientId = config.paypalClientId;
+          const plans = config.paypalPlans || {};
+
+          if (!clientId) {
+            throw new Error("PayPal client ID missing from /config");
+          }
+
+          // Display plan IDs for transparency
+          document.getElementById("indie-plan").textContent = plans.indie || "P-…";
+          document.getElementById("studio-plan").textContent = plans.studio || "P-…";
+          document.getElementById("pro-plan").textContent = plans.pro_studio || "P-…";
+
+          // Load PayPal SDK
+          await loadPayPalScript(clientId);
+
+          setStatus("Select a subscription tier to complete checkout.", false);
+          document.getElementById("plans-section").style.display = "grid";
+
+          // Render buttons
+          const createSubscriptionButton = (containerId, planId) => {
+            if (!planId) return;
+
+            window.paypal
+              .Buttons({
+                style: {
+                  label: "subscribe",
+                  layout: "vertical",
+                  shape: "pill",
+                },
+                createSubscription: function (data, actions) {
+                  // custom_id lets our backend know which job this subscription is for
+                  return actions.subscription.create({
+                    plan_id: planId,
+                    custom_id: String(jobId),
+                  });
+                },
+                onApprove: async function (data, actions) {
+                  try {
+                    setStatus("Payment approved. Finalizing your job…", false);
+
+                    // Inform backend that this job is now paid
+                    const res = await fetch("/paypal/mark-paid/" + jobId, {
+                      method: "POST",
+                    });
+
+                    if (!res.ok) {
+                      throw new Error("Backend failed to mark job as paid.");
+                    }
+
+                    setStatus(
+                      "Payment successful! Redirecting you back to preview…",
+                      false
+                    );
+                    // Redirect back to preview page so they can download
+                    window.location.href = "/preview/" + jobId;
+                  } catch (err) {
+                    console.error(err);
+                    setStatus(
+                      "Payment succeeded but backend update failed. Please contact support.",
+                      true
+                    );
+                  }
+                },
+                onError: function (err) {
+                  console.error("PayPal error:", err);
+                  setStatus("An error occurred with PayPal. Please try again.", true);
+                },
+              })
+              .render("#" + containerId);
+          };
+
+          createSubscriptionButton("paypal-indie-button", plans.indie);
+          createSubscriptionButton("paypal-studio-button", plans.studio);
+          createSubscriptionButton("paypal-pro-button", plans.pro_studio);
+        } catch (err) {
+          console.error(err);
+          setStatus("Error configuring checkout: " + err.message, true);
+        }
+      })();
+    </script>
+  </body>
+</html>
