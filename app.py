@@ -638,18 +638,14 @@ INDEX_HTML = """
     // (If you later add an API to expose logged-in email, update this.)
     userStatusEl.textContent = '';
 
-    if (PAYMENT_REQUIRED) {
-      syncButton.disabled = true;
-      paymentStatusEl.textContent = 'Complete payment to unlock syncing for this job.';
-    } else {
-      paymentStatusEl.textContent = 'Payment is disabled in this environment (testing mode).';
-    }
-
-    function renderFileList(files) {
-      if (!files.length) {
-        fileListEl.innerHTML = '<span class="text-slate-500">No files selected yet.</span>';
-        return;
-      }
+if (PAYMENT_REQUIRED) {
+  syncButton.disabled = true;
+  paymentStatusEl.textContent = 'Complete payment to unlock syncing for this job.';
+} else {
+  // Explicitly ensure the button is enabled in test mode
+  syncButton.disabled = false;
+  paymentStatusEl.textContent = 'Payment is disabled in this environment (testing mode). Sync is enabled.';
+}
       const items = [];
       for (const f of files) {
         items.push(
