@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VIM AudioSync – Outputs</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Tailwind -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        background: #050505;
+        color: #f9fafb;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen flex items-center justify-center">
+    <div class="max-w-xl w-full px-4 py-8">
+      <header class="mb-6 flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">
+            VIM AudioSync – Job Outputs
+          </h1>
+          <p class="text-sm text-gray-400 mt-1">
+            Look up a job by ID to view its status, preview, and download links.
+          </p>
+        </div>
+        <div class="text-xs text-gray-500 uppercase tracking-[0.2em]">
+          VIM MEDIA
+        </div>
+      </header>
+
+      <form id="lookup-form" class="flex gap-2 mb-4">
+        <input
+          id="job-id-input"
+          type="number"
+          min="1"
+          placeholder="Enter Job ID"
+          class="flex-1 rounded-md bg-black/50 border border-gray-800 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          required
+        />
+        <button
+          type="submit"
+          class="px-4 py-2 rounded-md text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white"
+        >
+          Lookup
+        </button>
+      </form>
+
+      <div
+        id="status"
+        class="mb-3 text-xs text-gray-300 bg-black/30 border border-gray-800 rounded-lg px-3 py-2 hidden"
+      ></div>
+
+      <div
+        id="job-details"
+        class="bg-black/40 border border-gray-800 rounded-xl p-4 text-sm text-gray-200 hidden"
+      >
+        <p class="mb-1">
+          <span class="font-semibold">Job ID:</span>
+          <span id="job-id" class="font-mono"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Created:</span>
+          <span id="job-created"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Email:</span>
+          <span id="job-email"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Filename:</span>
+          <span id="job-filename"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Plan:</span>
+          <span id="job-plan"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Status:</span>
+          <span id="job-status-text"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Paid:</span>
+          <span id="job-paid"></span>
+        </p>
+
+        <div class="mt-3 space-y-1 text-xs">
+          <div>
+            <span class="font-semibold">Preview URL:</span>
+            <br />
+            <a
+              id="job-preview"
+              href="#"
+              target="_blank"
+              class="text-rose-400 hover:text-rose-300 break-all"
+            ></a>
+          </div>
+          <div>
+            <span class="font-semibold">Download URL:</span>
+            <br />
+            <a
+              id="job-download"
+              href="#"
+              target="_blank"
+              class="text-emerald-400 hover:text-emerald-300 break-all"
+            ></a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("lookup-form");
+      const statusBox = document.getElementById("status");
+      const detailsBox = document.getElementById("job-details");
+
+      const jobIdText = document.getElementById("job-id");
+      const jobCreated = document.getElementById("job-created");
+      const jobEmail = document.getElementById("job-email");
+      const jobFilename = document.getElementById("job-filename");
+      const jobPlan = document.getElementById("job-plan");
+      const jobStatusText = document.getElementById("job-status-text");
+      const jobPaid = document.getElementById("job-paid");
+      const jobPreview = document.getElementById("job-preview");
+      const jobDownload = document.getElementById("job-download");
+
+      function setStatus(message, isError = false) {
+        statusBox.textContent = message;
+        statusBox.classList.remove("hidden");
+        statusBox.classList.toggle("text-rose-400", isError);
+        statusBox.classList.toggle("text-emerald-400", !isError);
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        detailsBox.classList.add("hidden");
+        const id = document.getElementById("job-id-input").value.trim();
+        if (!id) return;
+
+        setStatus("Fetching job details…", false);
+
+        try {
+          const res = await fetch("/job/" + id);
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(data.error || "Job lookup failed");
+          }
+
+          setStatus("Job found.", false);
+
+          jobIdText.textContent = "#" + data.id;
+          jobCreated.textContent = data.createdAt || "—";
+          jobEmail.textContent = data.email || "—";
+          jobFilename.textContent = data.originalFilename || "—";
+          jobPlan.textContent = data.plan || "—";
+          jobStatusText.textContent = data.status || "—";
+          jobPaid.textContent = data.isPaid ? "Yes" : "No";
+
+          jobPreview.textContent = data.previewUrl || "(not ready)";
+          jobPreview.href = data.previewUrl || "#";
+
+          jobDownload.textContent =
+            data.downloadUrl || "(unavailable until paid)";
+          jobDownload.href = data.downloadUrl || "#";
+
+          detailsBox.classList.remove("hidden");
+        } catch (err) {
+          console.error(err);
+          setStatus("Error: " + err.message, true);
+        }
+      });
+    </script>
+  </body>
+</html>
