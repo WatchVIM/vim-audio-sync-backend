@@ -390,21 +390,12 @@ INDEX_HTML = """
 
         <!-- Upload Form -->
         <form id="uploadForm" class="space-y-4">
-          <div>
-            <label class="block text-sm font-medium mb-1">Upload media</label>
-            <input id="files" name="files" type="file" multiple
-                   class="block w-full text-sm text-slate-100
-                          file:mr-3 file:py-2 file:px-4
-                          file:rounded-md file:border-0
-                          file:text-sm file:font-semibold
-                          file:bg-watchRed file:text-white
-                          hover:file:bg-red-700
-                          cursor-pointer" />
-            <p class="mt-2 text-xs text-slate-400">
-              Include camera video (.mp4, .mov, .mxf, .braw, .r3d, .crm) and matching
-              external audio (.wav, .mp3, .m4a, etc.). Use matching prefixes
-              (e.g. <code>SC01_T01_cam.mp4</code> and <code>SC01_T01_zoom.wav</code>).
-            </p>
+          id="uploadForm'
+          class="space-y-4"
+          method="post"
+          actions="/sync"
+          enctype="multipart/form-date"
+          >
           </div>
 
           <button id="syncButton" type="submit"
