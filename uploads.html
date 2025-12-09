@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>VIM AudioSync – Upload</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        background: #050505;
+        color: #f9fafb;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen flex items-center justify-center">
+    <div class="max-w-2xl w-full px-4 py-8">
+      <header class="mb-6 flex items-center justify-between">
+        <div>
+          <h1 class="text-2xl font-semibold tracking-tight">
+            VIM AudioSync – Upload Job
+          </h1>
+          <p class="text-sm text-gray-400 mt-1">
+            Upload your camera clips + external audio (or a .zip) to create a new sync job.
+          </p>
+        </div>
+        <div class="text-xs text-gray-500 uppercase tracking-[0.2em]">
+          VIM MEDIA
+        </div>
+      </header>
+
+      <form id="upload-form" class="space-y-4">
+        <div>
+          <label class="block text-sm text-gray-300 mb-1" for="email">
+            Email (optional)
+          </label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            placeholder="you@example.com"
+            class="w-full rounded-md bg-black/50 border border-gray-800 px-3 py-2 text-sm text-gray-100 placeholder:text-gray-500 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          />
+        </div>
+
+        <div>
+          <label class="block text-sm text-gray-300 mb-1" for="plan">
+            Plan (optional)
+          </label>
+          <select
+            id="plan"
+            name="plan"
+            class="w-full rounded-md bg-black/50 border border-gray-800 px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-rose-500"
+          >
+            <option value="">Select plan (optional)</option>
+            <option value="indie">Indie</option>
+            <option value="studio">Studio</option>
+            <option value="pro_studio">Pro Studio</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-sm text-gray-300 mb-1" for="file">
+            Upload file (.zip, .mp4, .mov, .mxf, .wav, etc.)
+          </label>
+          <input
+            id="file"
+            name="file"
+            type="file"
+            required
+            class="w-full text-sm text-gray-200 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-rose-600 file:text-white hover:file:bg-rose-700"
+          />
+        </div>
+
+        <button
+          type="submit"
+          class="inline-flex items-center justify-center px-4 py-2 rounded-md text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white"
+        >
+          Upload & Start Sync
+        </button>
+      </form>
+
+      <div
+        id="status"
+        class="mt-4 text-xs text-gray-300 bg-black/30 border border-gray-800 rounded-lg px-3 py-2 hidden"
+      ></div>
+
+      <div id="result" class="mt-4 text-sm text-gray-200 hidden">
+        <p class="mb-1">
+          <span class="font-semibold">Job ID:</span>
+          <span id="job-id" class="font-mono"></span>
+        </p>
+        <p class="mb-1">
+          <span class="font-semibold">Status:</span>
+          <span id="job-status"></span>
+        </p>
+        <p class="mt-2 text-xs text-gray-400">
+          Once your job is ready, you can preview it here:
+          <br />
+          <a
+            id="preview-link"
+            href="#"
+            class="text-rose-400 hover:text-rose-300 break-all"
+          ></a>
+        </p>
+        <p class="mt-1 text-xs text-gray-500">
+          When you’re done reviewing the preview, go to checkout to unlock download.
+        </p>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("upload-form");
+      const statusBox = document.getElementById("status");
+      const resultBox = document.getElementById("result");
+      const jobIdEl = document.getElementById("job-id");
+      const jobStatusEl = document.getElementById("job-status");
+      const previewLinkEl = document.getElementById("preview-link");
+
+      function setStatus(message, isError = false) {
+        statusBox.textContent = message;
+        statusBox.classList.remove("hidden");
+        statusBox.classList.toggle("text-rose-400", isError);
+        statusBox.classList.toggle("text-emerald-400", !isError);
+      }
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        resultBox.classList.add("hidden");
+        setStatus("Uploading file and starting sync…", false);
+
+        const fd = new FormData(form);
+        const file = fd.get("file");
+        if (!file || !file.name) {
+          setStatus("Please choose a file to upload.", true);
+          return;
+        }
+
+        try {
+          const res = await fetch("/upload", {
+            method: "POST",
+            body: fd,
+          });
+
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(data.error || "Upload failed");
+          }
+
+          setStatus("Sync completed. Job is ready for preview.", false);
+
+          const jobId = data.jobId;
+          const previewUrl =
+            data.previewUrl || (location.origin + "/preview/" + jobId);
+
+          jobIdEl.textContent = "#" + jobId;
+          jobStatusEl.textContent = data.status || "ready";
+          previewLinkEl.href = previewUrl;
+          previewLinkEl.textContent = previewUrl;
+
+          resultBox.classList.remove("hidden");
+        } catch (err) {
+          console.error(err);
+          setStatus("Error: " + err.message, true);
+        }
+      });
+    </script>
+  </body>
+</html>
