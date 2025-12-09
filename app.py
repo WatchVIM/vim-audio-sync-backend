@@ -605,7 +605,7 @@ INDEX_HTML = """
     document.getElementById('year').textContent = new Date().getFullYear();
 
     // ===== Payment config =====
-    const PAYMENT_REQUIRED = true;      // set false to test without PayPal
+    const PAYMENT_REQUIRED = false;      // set false to test without PayPal
     const PAY_PER_JOB_AMOUNT = "7.00";
 
     const INDIE_PLAN_ID  = "P-5HF24724VN545651WNEZ6SDQ";
