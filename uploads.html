@@ -24,7 +24,8 @@
             VIM AudioSync – Upload Job
           </h1>
           <p class="text-sm text-gray-400 mt-1">
-            Upload your camera clips + external audio (or a .zip) to create a new sync job.
+            Upload your camera clips + external audio files (or a single .zip)
+            to create a new sync job.
           </p>
         </div>
         <div class="text-xs text-gray-500 uppercase tracking-[0.2em]">
@@ -32,7 +33,7 @@
         </div>
       </header>
 
-      <form id="upload-form" class="space-y-4">
+      <form id="upload-form" class="space-y-4" enctype="multipart/form-data">
         <div>
           <label class="block text-sm text-gray-300 mb-1" for="email">
             Email (optional)
@@ -63,16 +64,24 @@
         </div>
 
         <div>
-          <label class="block text-sm text-gray-300 mb-1" for="file">
-            Upload file (.zip, .mp4, .mov, .mxf, .wav, etc.)
+          <label class="block text-sm text-gray-300 mb-1" for="files">
+            Upload files
+            <span class="text-gray-500 text-xs">
+              (.zip, .mp4, .mov, .mxf, .wav, etc. – you can select multiple)
+            </span>
           </label>
           <input
-            id="file"
-            name="file"
+            id="files"
+            name="files"
             type="file"
+            multiple
             required
             class="w-full text-sm text-gray-200 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-rose-600 file:text-white hover:file:bg-rose-700"
           />
+          <p class="mt-1 text-xs text-gray-500">
+            Tip: select your camera file(s) and external audio file(s) together,
+            or upload a single pre-zipped bundle.
+          </p>
         </div>
 
         <button
@@ -106,9 +115,6 @@
             class="text-rose-400 hover:text-rose-300 break-all"
           ></a>
         </p>
-        <p class="mt-1 text-xs text-gray-500">
-          When you’re done reviewing the preview, go to checkout to unlock download.
-        </p>
       </div>
     </div>
 
@@ -130,13 +136,22 @@
       form.addEventListener("submit", async (e) => {
         e.preventDefault();
         resultBox.classList.add("hidden");
-        setStatus("Uploading file and starting sync…", false);
+        setStatus("Uploading files and starting sync…", false);
 
-        const fd = new FormData(form);
-        const file = fd.get("file");
-        if (!file || !file.name) {
-          setStatus("Please choose a file to upload.", true);
+        const filesInput = document.getElementById("files");
+        const files = filesInput.files;
+        if (!files || !files.length) {
+          setStatus("Please choose at least one file to upload.", true);
           return;
+        }
+
+        const fd = new FormData();
+        fd.append("email", document.getElementById("email").value);
+        fd.append("plan", document.getElementById("plan").value);
+
+        // Append all selected files
+        for (const file of files) {
+          fd.append("files", file);
         }
 
         try {
@@ -155,7 +170,7 @@
 
           const jobId = data.jobId;
           const previewUrl =
-            data.previewUrl || (location.origin + "/preview/" + jobId);
+            data.previewUrl || location.origin + "/preview/" + jobId;
 
           jobIdEl.textContent = "#" + jobId;
           jobStatusEl.textContent = data.status || "ready";
