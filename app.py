@@ -43,7 +43,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # ============================================================
 
 # 👇 Set this to your real backend URL (DigitalOcean / domain)
-BACKEND_URL = os.getenv("BACKEND_URL", "https://vim-audio-sync-backend.example.com")
+BACKEND_URL = os.getenv("BACKEND_URL", "https://api.audiosync.watchvim.com")
 
 # Storage
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
