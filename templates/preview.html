@@ -1,85 +1,124 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>VIM AudioSync – Preview</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-      body {
-        background: #050505;
-        color: #f9fafb;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
+<head>
+  <meta charset="UTF-8" />
+  <title>Preview · Job #{{ job_id }} · VIM AudioSync</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            watchBlack: "#0a0a0a",
+            watchRed: "#e50914",
+            watchGold: "#d4af37",
+          }
+        }
       }
-    </style>
-  </head>
-  <body class="min-h-screen flex items-center justify-center" oncontextmenu="return false;">
-    <div class="max-w-4xl w-full px-4 py-8">
-      <header class="mb-6 flex items-center justify-between">
+    }
+  </script>
+
+  <style>
+    body {
+      background: radial-gradient(circle at top, #111827 0, #020617 45%, #000000 100%);
+      color: #f9fafb;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col items-center px-4 py-10">
+
+  <div class="w-full max-w-4xl bg-watchBlack/90 border border-white/10 rounded-3xl shadow-2xl backdrop-blur-md p-6 sm:p-8 space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="h-10 flex items-center">
+          <img
+            src="https://t6ht6kdwnezp05ut.public.blob.vercel-storage.com/WatchVIM%20-%20Content/WatchVIM_New_OTT_Logo.png"
+            alt="VIM Media logo"
+            class="h-10 w-auto object-contain"
+          />
+        </div>
         <div>
-          <h1 class="text-2xl font-semibold tracking-tight">
-            VIM AudioSync – Synced Preview
+          <h1 class="text-base sm:text-lg font-semibold tracking-tight">
+            VIM Media AudioSync · Preview
           </h1>
-          <p class="text-sm text-gray-400 mt-1">
-            Review the synced footage &amp; audio before you purchase.
+          <p class="text-xs text-slate-400">
+            Job #{{ job_id }}
           </p>
         </div>
-        <div class="text-xs text-gray-500 uppercase tracking-[0.2em]">
-          VIM MEDIA
-        </div>
-      </header>
+      </div>
 
-      <section class="bg-black/60 rounded-xl border border-gray-800 p-4">
-        <div class="relative w-full aspect-video bg-black rounded-lg overflow-hidden">
-          <video
-            class="w-full h-full"
-            controls
-            controlsList="nodownload"
-          >
-            <source src="{{ url_for('preview_media', job_id=job_id) }}" type="video/mp4" />
-            Your browser does not support HTML5 video playback.
-          </video>
-        </div>
-        <p class="text-xs text-gray-500 mt-3">
-          This is a streaming preview only. Downloads are disabled until purchase is completed.
-        </p>
-      </section>
-
-      <section class="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div class="text-sm text-gray-300">
-          Job ID:
-          <span class="font-mono text-gray-100">#{{ job_id }}</span><br />
+      <div class="flex flex-col items-end gap-2">
+        <span class="inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-medium border"
+              {% if is_paid %}
+                class="border-emerald-400/60 bg-emerald-500/10 text-emerald-200"
+              {% else %}
+                class="border-amber-400/60 bg-amber-500/10 text-amber-100"
+              {% endif %}>
+          <span class="w-1.5 h-1.5 rounded-full
+            {% if is_paid %} bg-emerald-400 {% else %} bg-amber-400 {% endif %}">
+          </span>
           {% if is_paid %}
-            <span class="inline-flex items-center text-emerald-400 text-xs font-medium mt-1">
-              ✓ Paid – you can download your synced file.
-            </span>
+            Paid · Download unlocked on main AudioSync page
           {% else %}
-            <span class="inline-flex items-center text-amber-400 text-xs font-medium mt-1">
-              Preview mode – purchase required to download.
-            </span>
+            Unpaid · Download locked until payment
           {% endif %}
-        </div>
+        </span>
 
-        <div class="flex gap-2">
-          {% if is_paid %}
-            <a
-              href="{{ url_for('download', job_id=job_id) }}"
-              class="px-4 py-2 rounded-md text-sm font-medium bg-emerald-500 hover:bg-emerald-600 text-white"
-            >
-              Download Synced File
-            </a>
-          {% else %}
-            <!-- Your front-end checkout page should be wired to use /config (PayPal client + plans) -->
-            <a
-              href="/checkout?jobId={{ job_id }}"
-              class="px-4 py-2 rounded-md text-sm font-medium bg-rose-600 hover:bg-rose-700 text-white"
-            >
-              Proceed to Checkout
-            </a>
-          {% endif %}
-        </div>
-      </section>
-    </div>
-  </body>
+        <a href="/"
+           class="inline-flex items-center gap-1 text-[11px] font-semibold text-watchGold hover:text-white">
+          ← Back to AudioSync
+        </a>
+      </div>
+    </header>
+
+    <!-- Info -->
+    <section class="text-xs sm:text-sm text-slate-300 space-y-1">
+      <p>
+        This is a <span class="font-semibold text-watchGold">streaming preview</span> of your synced media.
+        Use it to confirm picture and audio sync before downloading.
+      </p>
+      <p class="text-slate-400">
+        For download access, go back to the main AudioSync tab:
+        <span class="text-slate-200">
+          upload &nbsp;→&nbsp; wait for sync &nbsp;→&nbsp; pay (if required) &nbsp;→&nbsp; download.
+        </span>
+      </p>
+    </section>
+
+    <!-- Video Player -->
+    <section class="space-y-3">
+      <div class="aspect-video w-full rounded-2xl overflow-hidden border border-white/10 bg-black">
+        <video
+          controls
+          playsinline
+          class="w-full h-full bg-black"
+        >
+          <source src="{{ url_for('preview_media', job_id=job_id) }}" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
+
+      <p class="text-[11px] text-slate-500">
+        If playback stutters on large 4K / RAW sources, download the final file from the main AudioSync tab
+        and play it locally in your NLE or media player.
+      </p>
+    </section>
+
+    <!-- Footer -->
+    <footer class="pt-3 border-t border-white/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+      <p class="text-[11px] text-slate-500">
+        © VIM Media, LLC · AudioSync v1
+      </p>
+      <p class="text-[11px] text-slate-500">
+        Built for editors who live in timelines, bins & multitrack madness.
+      </p>
+    </footer>
+  </div>
+
+</body>
 </html>
